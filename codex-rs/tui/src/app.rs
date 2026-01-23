@@ -35,6 +35,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
+use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -57,6 +58,8 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionSource;
 use codex_core::protocol::SkillErrorInfo;
 use codex_core::protocol::TokenUsage;
+use codex_core::terminal::Multiplexer;
+use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::OtelManager;
@@ -79,12 +82,14 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use shlex::try_join;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -145,6 +150,74 @@ fn session_summary(token_usage: TokenUsage, thread_id: Option<ThreadId>) -> Opti
         usage_line,
         resume_command,
     })
+}
+
+fn codex_executable() -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("codex"))
+}
+
+struct MultiplexerSpawnConfig {
+    program: &'static str,
+    args: Vec<String>,
+    description: &'static str,
+}
+
+fn resume_command_parts(exe: &Path, thread_id: &ThreadId) -> Vec<String> {
+    vec![
+        exe.display().to_string(),
+        "resume".to_string(),
+        thread_id.to_string(),
+    ]
+}
+
+fn build_zellij_new_pane_args(resume_command: &[String]) -> Vec<String> {
+    let mut args = vec![
+        "action".to_string(),
+        "new-pane".to_string(),
+        "--close-on-exit".to_string(),
+        "--".to_string(),
+    ];
+    args.extend(resume_command.iter().cloned());
+    args
+}
+
+fn build_tmux_new_pane_args(resume_command: &[String]) -> Vec<String> {
+    let command = try_join(resume_command.iter().map(String::as_str))
+        .unwrap_or_else(|_| resume_command.join(" "));
+    vec!["split-window".to_string(), "-h".to_string(), command]
+}
+
+fn fork_spawn_config(
+    multiplexer: &Multiplexer,
+    exe: &Path,
+    thread_id: &ThreadId,
+) -> MultiplexerSpawnConfig {
+    let resume_command = resume_command_parts(exe, thread_id);
+    match multiplexer {
+        Multiplexer::Zellij {} => MultiplexerSpawnConfig {
+            program: "zellij",
+            args: build_zellij_new_pane_args(&resume_command),
+            description: "Zellij pane",
+        },
+        Multiplexer::Tmux { .. } => MultiplexerSpawnConfig {
+            program: "tmux",
+            args: build_tmux_new_pane_args(&resume_command),
+            description: "tmux pane",
+        },
+    }
+}
+
+async fn spawn_fork_in_new_pane(config: MultiplexerSpawnConfig) -> Result<(), String> {
+    let program = config.program;
+    let args = config.args;
+    let status = tokio::task::spawn_blocking(move || Command::new(program).args(args).status())
+        .await
+        .map_err(|err| format!("failed to spawn {program} pane: {err}"))?;
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(format!("{program} exited with status {status}")),
+        Err(err) => Err(format!("failed to run {program}: {err}")),
+    }
 }
 
 fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
@@ -551,6 +624,7 @@ pub(crate) struct App {
     windows_sandbox: WindowsSandboxState,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
+    suppressed_thread_created: HashSet<ThreadId>,
     active_thread_id: Option<ThreadId>,
     active_thread_rx: Option<mpsc::Receiver<Event>>,
     primary_thread_id: Option<ThreadId>,
@@ -859,10 +933,52 @@ impl App {
 
     fn reset_thread_event_state(&mut self) {
         self.thread_event_channels.clear();
+        self.suppressed_thread_created.clear();
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_events.clear();
+    }
+
+    fn in_terminal_multiplexer(&self) -> bool {
+        terminal_info().multiplexer.is_some()
+    }
+
+    async fn try_spawn_fork_in_new_pane(
+        &mut self,
+        forked_thread_id: ThreadId,
+        forked_thread: &Arc<CodexThread>,
+    ) -> bool {
+        let terminal_info = terminal_info();
+        let Some(multiplexer) = terminal_info.multiplexer.as_ref() else {
+            return false;
+        };
+        let exe = codex_executable();
+        let config = fork_spawn_config(multiplexer, &exe, &forked_thread_id);
+        let description = config.description;
+        if let Err(err) = spawn_fork_in_new_pane(config).await {
+            self.chat_widget.add_error_message(format!(
+                "Forked session created but failed to open a new {description}: {err}"
+            ));
+            return false;
+        }
+
+        self.suppressed_thread_created.insert(forked_thread_id);
+        if let Err(err) = forked_thread.submit(Op::Shutdown).await {
+            self.chat_widget.add_error_message(format!(
+                "Forked session opened in a new {description} but failed to shut down the local fork {forked_thread_id}: {err}"
+            ));
+        }
+        self.server.remove_thread(&forked_thread_id).await;
+        self.thread_event_channels.remove(&forked_thread_id);
+        let resume_command = format!("codex resume {forked_thread_id}");
+        let spans = vec![
+            format!("Forked session opened in a new {description} (resume it with ").into(),
+            resume_command.cyan(),
+            ").".into(),
+        ];
+        self.chat_widget.add_plain_history_lines(vec![spans.into()]);
+        true
     }
 
     async fn drain_active_thread_events(&mut self, tui: &mut tui::Tui) -> Result<()> {
@@ -1081,6 +1197,7 @@ impl App {
             suppress_shutdown_complete: false,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
+            suppressed_thread_created: HashSet::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -1389,6 +1506,15 @@ impl App {
                         .await
                     {
                         Ok(forked) => {
+                            if self.in_terminal_multiplexer() {
+                                if self
+                                    .try_spawn_fork_in_new_pane(forked.thread_id, &forked.thread)
+                                    .await
+                                {
+                                    tui.frame_requester().schedule_frame();
+                                    return Ok(AppRunControl::Continue);
+                                }
+                            }
                             self.shutdown_current_thread().await;
                             let init = self.chatwidget_init_for_forked_or_resumed_thread(
                                 tui,
@@ -2180,6 +2306,9 @@ impl App {
     }
 
     async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
+        if self.suppressed_thread_created.remove(&thread_id) {
+            return Ok(());
+        }
         if self.thread_event_channels.contains_key(&thread_id) {
             return Ok(());
         }
@@ -2579,6 +2708,7 @@ mod tests {
             suppress_shutdown_complete: false,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
+            suppressed_thread_created: HashSet::new(),
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,
@@ -2631,6 +2761,7 @@ mod tests {
                 suppress_shutdown_complete: false,
                 windows_sandbox: WindowsSandboxState::default(),
                 thread_event_channels: HashMap::new(),
+                suppressed_thread_created: HashSet::new(),
                 active_thread_id: None,
                 active_thread_rx: None,
                 primary_thread_id: None,
