@@ -251,11 +251,16 @@ fn fork_spawn_config(
 
 const TMUX_FLOAT_UNSUPPORTED_MESSAGE: &str = "tmux does not support /fork float.";
 const ZELLIJ_UNSUPPORTED_MESSAGE: &str = "Zellij only supports /fork [right|down|float].";
+const FORK_PLACEMENT_REQUIRES_MULTIPLEXER_MESSAGE: &str =
+    "Fork pane placement requires a terminal multiplexer.";
 
 fn validate_fork_placement(placement: Option<ForkPanePlacement>) -> Result<(), String> {
     let terminal_info = terminal_info();
     let Some(multiplexer) = terminal_info.multiplexer.as_ref() else {
-        return Ok(());
+        return match placement {
+            Some(_) => Err(FORK_PLACEMENT_REQUIRES_MULTIPLEXER_MESSAGE.to_string()),
+            None => Ok(()),
+        };
     };
     match multiplexer {
         Multiplexer::Zellij {} => match placement {
@@ -1567,10 +1572,7 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ForkCurrentSession { placement } => {
-                // If we're in a terminal multiplexer, validate the placement argument before forking.
-                if self.in_terminal_multiplexer()
-                    && let Err(message) = validate_fork_placement(placement)
-                {
+                if let Err(message) = validate_fork_placement(placement) {
                     self.chat_widget.add_error_message(message);
                     tui.frame_requester().schedule_frame();
                     return Ok(AppRunControl::Continue);
