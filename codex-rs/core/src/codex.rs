@@ -1889,9 +1889,9 @@ impl Session {
                 let placeholder = Self::placeholder_request_user_input_questions(&question_ids);
                 state.upsert_request_user_input_call(call_id.clone(), placeholder);
             }
-            state.remove_pending_user_input_item(&call_id);
+            state.remove_pending_request_user_input_answer(&call_id);
             if let Some(pending_item) = pending_item {
-                state.upsert_pending_user_input_item(call_id.clone(), pending_item);
+                state.upsert_pending_request_user_input_answer(call_id.clone(), pending_item);
             }
         }
 
@@ -1920,7 +1920,7 @@ impl Session {
 
         if let Some(call_id) = call_id {
             let mut state = self.state.lock().await;
-            state.remove_pending_user_input_item(&call_id);
+            state.remove_pending_request_user_input_answer(&call_id);
         }
     }
 
@@ -2595,15 +2595,15 @@ impl Session {
         }
     }
 
-    pub async fn take_pending_user_input_items(&self) -> Vec<ResponseInputItem> {
+    pub async fn take_pending_request_user_input_answers(&self) -> Vec<ResponseInputItem> {
         let mut state = self.state.lock().await;
-        state.take_pending_user_input_items()
+        state.take_pending_request_user_input_answers()
     }
 
     #[cfg(test)]
-    pub async fn has_pending_user_input_items(&self) -> bool {
+    pub async fn has_pending_request_user_input_answers(&self) -> bool {
         let state = self.state.lock().await;
-        state.has_pending_user_input_items()
+        state.has_pending_request_user_input_answers()
     }
 
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
@@ -3412,7 +3412,7 @@ mod handlers {
 
         {
             let mut state = sess.state.lock().await;
-            state.clear_pending_user_input_items();
+            state.clear_pending_request_user_input_answers();
         }
 
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
@@ -3836,9 +3836,9 @@ pub(crate) async fn run_turn(
     }
 
     // Replay interrupted request_user_input outputs before the new user prompt.
-    let pending_user_input_items = sess.take_pending_user_input_items().await;
-    if !pending_user_input_items.is_empty() {
-        let pending_response_items = pending_user_input_items
+    let pending_request_user_input_answers = sess.take_pending_request_user_input_answers().await;
+    if !pending_request_user_input_answers.is_empty() {
+        let pending_response_items = pending_request_user_input_answers
             .into_iter()
             .map(ResponseItem::from)
             .collect::<Vec<ResponseItem>>();
@@ -6192,7 +6192,7 @@ mod tests {
         {
             let mut state = sess.state.lock().await;
             state.upsert_request_user_input_call(call_id.clone(), questions);
-            state.upsert_pending_user_input_item(call_id.clone(), pending_item);
+            state.upsert_pending_request_user_input_answer(call_id.clone(), pending_item);
         }
 
         let input = vec![UserInput::Text {
@@ -6211,7 +6211,7 @@ mod tests {
 
         sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
-        assert!(!sess.has_pending_user_input_items().await);
+        assert!(!sess.has_pending_request_user_input_answers().await);
 
         let history = sess.clone_history().await;
         let mut output_idx = None;
