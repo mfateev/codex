@@ -1818,7 +1818,7 @@ impl HistoryCell for RequestUserInputResultCell {
                 width,
                 "  • ".into(),
                 "    ".into(),
-                Style::default(),
+                Style::default().add_modifier(Modifier::DIM),
             ));
 
             let Some(answer) = answer.filter(|answer| !answer.answers.is_empty()) else {
