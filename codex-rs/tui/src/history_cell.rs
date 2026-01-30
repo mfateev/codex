@@ -1830,8 +1830,8 @@ impl HistoryCell for RequestUserInputResultCell {
                 lines.extend(wrap_with_prefix(
                     &option,
                     width,
-                    "    - ".dim(),
-                    "      ".dim(),
+                    "    answer: ".dim(),
+                    "            ".dim(),
                     Style::default().fg(Color::Green),
                 ));
             }
