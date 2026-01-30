@@ -566,6 +566,8 @@ pub(crate) struct ChatWidget {
     pending_request_user_input_answers: VecDeque<PendingRequestUserInputAnswers>,
     // Cached request_user_input questions for replayed sessions, keyed by call_id.
     request_user_input_questions: HashMap<String, Vec<RequestUserInputQuestion>>,
+    // Turn aborts encountered during replay that should render after question results.
+    pending_replay_turn_aborts: Vec<TurnAbortReason>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
     /// When `Some`, the user has pressed a quit shortcut and the second press
@@ -1534,6 +1536,12 @@ impl ChatWidget {
             .insert(ev.call_id, ev.questions);
     }
 
+    fn flush_pending_replay_turn_aborts(&mut self) {
+        for reason in self.pending_replay_turn_aborts.drain(..) {
+            self.on_interrupted_turn(reason);
+        }
+    }
+
     fn on_raw_response_item_replay(&mut self, ev: RawResponseItemEvent) {
         match ev.item {
             ResponseItem::FunctionCall {
@@ -1585,6 +1593,9 @@ impl ChatWidget {
                     answers,
                     interrupted,
                 ));
+                if !self.pending_replay_turn_aborts.is_empty() {
+                    self.flush_pending_replay_turn_aborts();
+                }
             }
             _ => {}
         }
@@ -2361,6 +2372,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             pending_request_user_input_answers: VecDeque::new(),
             request_user_input_questions: HashMap::new(),
+            pending_replay_turn_aborts: Vec::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2512,6 +2524,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             pending_request_user_input_answers: VecDeque::new(),
             request_user_input_questions: HashMap::new(),
+            pending_replay_turn_aborts: Vec::new(),
             show_welcome_banner: is_first_run,
             suppress_session_configured_redraw: false,
             pending_notification: None,
@@ -2644,6 +2657,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             pending_request_user_input_answers: VecDeque::new(),
             request_user_input_questions: HashMap::new(),
+            pending_replay_turn_aborts: Vec::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
             pending_notification: None,
@@ -3428,6 +3442,9 @@ impl ChatWidget {
             // `id: None` indicates a synthetic/fake id coming from replay.
             self.dispatch_event_msg(None, msg, true);
         }
+        if !self.pending_replay_turn_aborts.is_empty() {
+            self.flush_pending_replay_turn_aborts();
+        }
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
@@ -3516,13 +3533,21 @@ impl ChatWidget {
             EventMsg::McpStartupComplete(ev) => self.on_mcp_startup_complete(ev),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
-                    self.on_interrupted_turn(ev.reason);
+                    if from_replay && !self.request_user_input_questions.is_empty() {
+                        self.pending_replay_turn_aborts.push(ev.reason);
+                    } else {
+                        self.on_interrupted_turn(ev.reason);
+                    }
                 }
                 TurnAbortReason::Replaced => {
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
                 }
                 TurnAbortReason::ReviewEnded => {
-                    self.on_interrupted_turn(ev.reason);
+                    if from_replay && !self.request_user_input_questions.is_empty() {
+                        self.pending_replay_turn_aborts.push(ev.reason);
+                    } else {
+                        self.on_interrupted_turn(ev.reason);
+                    }
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
