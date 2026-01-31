@@ -1376,10 +1376,11 @@ impl Session {
         &self,
         previous_collaboration_mode: &CollaborationMode,
         next_collaboration_mode: Option<&CollaborationMode>,
-        force_collaboration_instructions: bool,
+        force_inject_collaboration_instructions: bool,
     ) -> Option<ResponseItem> {
         if let Some(next_mode) = next_collaboration_mode {
-            if !force_collaboration_instructions && previous_collaboration_mode == next_mode {
+            if !force_inject_collaboration_instructions && previous_collaboration_mode == next_mode
+            {
                 return None;
             }
             // If the next mode has empty developer instructions, this returns None and we emit no
@@ -1396,7 +1397,7 @@ impl Session {
         current_context: &TurnContext,
         previous_collaboration_mode: &CollaborationMode,
         next_collaboration_mode: Option<&CollaborationMode>,
-        force_collaboration_instructions: bool,
+        force_inject_collaboration_instructions: bool,
     ) -> Vec<ResponseItem> {
         let mut update_items = Vec::new();
         if let Some(env_item) =
@@ -1412,7 +1413,7 @@ impl Session {
         if let Some(collaboration_mode_item) = self.build_collaboration_mode_update_item(
             previous_collaboration_mode,
             next_collaboration_mode,
-            force_collaboration_instructions,
+            force_inject_collaboration_instructions,
         ) {
             update_items.push(collaboration_mode_item);
         }
@@ -2707,10 +2708,10 @@ mod handlers {
         }
 
         let current_context = sess.new_default_turn_with_sub_id(sub_id).await;
-        let force_collaboration_instructions = {
+        let force_inject_collaboration_instructions = {
             let mut state = sess.state.lock().await;
-            let force = state.force_collaboration_instructions;
-            state.force_collaboration_instructions = false;
+            let force = state.force_inject_collaboration_instructions;
+            state.force_inject_collaboration_instructions = false;
             force
         };
         let update_items = sess.build_settings_update_items(
@@ -2718,7 +2719,7 @@ mod handlers {
             &current_context,
             &previous_collaboration_mode,
             next_collaboration_mode.as_ref(),
-            force_collaboration_instructions,
+            force_inject_collaboration_instructions,
         );
         if !update_items.is_empty() {
             sess.record_conversation_items(&current_context, &update_items)
@@ -2794,10 +2795,10 @@ mod handlers {
         // Attempt to inject input into current task
         if let Err(items) = sess.inject_input(items).await {
             sess.seed_initial_context_if_needed(&current_context).await;
-            let force_collaboration_instructions = {
+            let force_inject_collaboration_instructions = {
                 let mut state = sess.state.lock().await;
-                let force = state.force_collaboration_instructions;
-                state.force_collaboration_instructions = false;
+                let force = state.force_inject_collaboration_instructions;
+                state.force_inject_collaboration_instructions = false;
                 force
             };
             let update_items = sess.build_settings_update_items(
@@ -2805,7 +2806,7 @@ mod handlers {
                 &current_context,
                 &previous_collaboration_mode,
                 next_collaboration_mode.as_ref(),
-                force_collaboration_instructions,
+                force_inject_collaboration_instructions,
             );
             if !update_items.is_empty() {
                 sess.record_conversation_items(&current_context, &update_items)
@@ -3129,7 +3130,7 @@ mod handlers {
                 state.session_configuration.collaboration_mode = collaboration_mode;
                 applied = true;
             }
-            state.force_collaboration_instructions = !applied;
+            state.force_inject_collaboration_instructions = !applied;
         }
         sess.recompute_token_usage(turn_context.as_ref()).await;
 
@@ -5113,13 +5114,13 @@ mod tests {
         let rollback_event = wait_for_thread_rolled_back(&rx).await;
         assert_eq!(rollback_event.num_turns, 1);
 
-        let force_collaboration_instructions = {
+        let force_inject_collaboration_instructions = {
             let mut state = sess.state.lock().await;
-            let force = state.force_collaboration_instructions;
-            state.force_collaboration_instructions = false;
+            let force = state.force_inject_collaboration_instructions;
+            state.force_inject_collaboration_instructions = false;
             force
         };
-        assert!(force_collaboration_instructions);
+        assert!(force_inject_collaboration_instructions);
 
         let current_context = sess.new_default_turn_with_sub_id("sub-2".to_string()).await;
         let previous_collaboration_mode = {
@@ -5131,7 +5132,7 @@ mod tests {
             &current_context,
             &previous_collaboration_mode,
             Some(&previous_collaboration_mode),
-            force_collaboration_instructions,
+            force_inject_collaboration_instructions,
         );
         let expected_item: ResponseItem =
             DeveloperInstructions::from_collaboration_mode(&previous_collaboration_mode)
@@ -5196,10 +5197,10 @@ mod tests {
         let rollback_event = wait_for_thread_rolled_back(&rx).await;
         pretty_assertions::assert_eq!(rollback_event.num_turns, 1);
 
-        let (collaboration_mode, force_collaboration_instructions) = {
+        let (collaboration_mode, force_inject_collaboration_instructions) = {
             let mut state = sess.state.lock().await;
-            let force = state.force_collaboration_instructions;
-            state.force_collaboration_instructions = false;
+            let force = state.force_inject_collaboration_instructions;
+            state.force_inject_collaboration_instructions = false;
             (
                 state.session_configuration.collaboration_mode.clone(),
                 force,
@@ -5207,7 +5208,7 @@ mod tests {
         };
 
         pretty_assertions::assert_eq!(collaboration_mode, code_mode);
-        assert!(force_collaboration_instructions);
+        assert!(force_inject_collaboration_instructions);
     }
 
     #[tokio::test]
