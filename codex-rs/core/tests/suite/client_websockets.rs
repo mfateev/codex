@@ -10,10 +10,12 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::TransportManager;
 use codex_core::WireApi;
+use codex_core::auth::AuthMode;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::protocol::SessionSource;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
@@ -261,7 +263,10 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        auth_manager.get_auth_mode(),
+        auth_manager.auth_mode().map(|mode| match mode {
+            AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
+            AuthMode::Chatgpt => TelemetryAuthMode::Chatgpt,
+        }),
         false,
         "test".to_string(),
         SessionSource::Exec,

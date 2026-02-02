@@ -12,8 +12,10 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::TransportManager;
 use codex_core::WireApi;
+use codex_core::auth::AuthMode;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::protocol::SessionSource;
@@ -76,7 +78,10 @@ async fn run_stream_with_bytes(sse_body: &[u8]) -> Vec<ResponseEvent> {
 
     let conversation_id = ThreadId::new();
     let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
-    let auth_mode = auth_manager.get_auth_mode();
+    let auth_mode = auth_manager.auth_mode().map(|mode| match mode {
+        AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
+        AuthMode::Chatgpt => TelemetryAuthMode::Chatgpt,
+    });
     let model = ModelsManager::get_model_offline(config.model.as_deref());
     let model_info = ModelsManager::construct_model_info_offline(model.as_str(), &config);
     let otel_manager = OtelManager::new(

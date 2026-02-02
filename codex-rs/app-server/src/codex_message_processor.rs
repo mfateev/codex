@@ -1123,7 +1123,7 @@ impl CodexMessageProcessor {
             .await;
 
         let payload_v2 = AccountUpdatedNotification {
-            auth_mode: self.auth_manager.get_auth_mode(),
+            auth_mode: self.auth_manager.get_api_auth_mode(),
         };
         self.outgoing
             .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -1271,14 +1271,15 @@ impl CodexMessageProcessor {
         }
 
         let account = match self.auth_manager.auth_cached() {
-            Some(auth) => Some(match auth {
-                CodexAuth::ApiKey(_) => Account::ApiKey {},
-                CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
+            Some(auth) => {
+                if auth.is_chatgpt_auth() {
                     let email = auth.get_account_email();
                     let plan_type = auth.account_plan_type();
 
                     match (email, plan_type) {
-                        (Some(email), Some(plan_type)) => Account::Chatgpt { email, plan_type },
+                        (Some(email), Some(plan_type)) => {
+                            Some(Account::Chatgpt { email, plan_type })
+                        }
                         _ => {
                             let error = JSONRPCErrorError {
                                 code: INVALID_REQUEST_ERROR_CODE,
@@ -1291,8 +1292,10 @@ impl CodexMessageProcessor {
                             return;
                         }
                     }
+                } else {
+                    Some(Account::ApiKey {})
                 }
-            }),
+            }
             None => None,
         };
 

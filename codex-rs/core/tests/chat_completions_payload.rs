@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use codex_app_server_protocol::AuthMode;
 use codex_core::ContentItem;
 use codex_core::LocalShellAction;
 use codex_core::LocalShellExecAction;
@@ -15,6 +14,7 @@ use codex_core::TransportManager;
 use codex_core::WireApi;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::protocol::SessionSource;
@@ -84,7 +84,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         model_info.slug.as_str(),
         None,
         Some("test@test.com".to_string()),
-        Some(AuthMode::ApiKey),
+        Some(TelemetryAuthMode::ApiKey),
         false,
         "test".to_string(),
         SessionSource::Exec,

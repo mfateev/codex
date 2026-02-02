@@ -223,7 +223,7 @@ impl ModelClient {
         let api_provider = self
             .state
             .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
+            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let request_telemetry = self.build_request_telemetry();
@@ -515,7 +515,7 @@ impl ModelClientSession {
             let api_provider = self
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
@@ -571,7 +571,7 @@ impl ModelClientSession {
             let api_provider = self
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let (request_telemetry, sse_telemetry) = self.build_streaming_telemetry();
@@ -617,7 +617,7 @@ impl ModelClientSession {
             let api_provider = self
                 .state
                 .provider
-                .to_api_provider(auth.as_ref().map(CodexAuth::internal_auth_mode))?;
+                .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
             let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
             let compression = self.responses_request_compression(auth.as_ref());
 

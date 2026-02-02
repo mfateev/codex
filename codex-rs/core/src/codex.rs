@@ -16,6 +16,7 @@ use crate::agent::MAX_THREAD_SPAWN_DEPTH;
 use crate::agent::agent_status_from_event;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::build_track_events_context;
+use crate::auth::AuthMode;
 use crate::compact;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -205,6 +206,7 @@ use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
 use codex_otel::OtelManager;
+use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -843,13 +845,17 @@ impl Session {
         maybe_push_unstable_features_warning(&config, &mut post_session_configured_events);
 
         let auth = auth.as_ref();
+        let auth_mode = auth.map(CodexAuth::auth_mode).map(|mode| match mode {
+            AuthMode::ApiKey => TelemetryAuthMode::ApiKey,
+            AuthMode::Chatgpt => TelemetryAuthMode::Chatgpt,
+        });
         let otel_manager = OtelManager::new(
             conversation_id,
             session_configuration.collaboration_mode.model(),
             session_configuration.collaboration_mode.model(),
             auth.and_then(CodexAuth::get_account_id),
             auth.and_then(CodexAuth::get_account_email),
-            auth.map(CodexAuth::api_auth_mode),
+            auth_mode,
             config.otel.log_user_prompt,
             terminal::user_agent(),
             session_configuration.session_source.clone(),
@@ -4169,7 +4175,7 @@ async fn try_run_sampling_request(
         approval_policy = turn_context.approval_policy,
         sandbox_policy = turn_context.sandbox_policy,
         effort = turn_context.client.get_reasoning_effort(),
-        auth_mode = sess.services.auth_manager.get_auth_mode(),
+        auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
 
@@ -4482,7 +4488,7 @@ mod tests {
     use crate::tools::registry::ToolHandler;
     use crate::turn_diff_tracker::TurnDiffTracker;
     use codex_app_server_protocol::AppInfo;
-    use codex_app_server_protocol::AuthMode;
+    use codex_otel::TelemetryAuthMode;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ResponseItem;
     use std::path::Path;
@@ -5239,7 +5245,7 @@ mod tests {
             model_info.slug.as_str(),
             None,
             Some("test@test.com".to_string()),
-            Some(AuthMode::Chatgpt),
+            Some(TelemetryAuthMode::Chatgpt),
             false,
             "test".to_string(),
             session_source,
