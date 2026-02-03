@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::AuthManager;
+use crate::entropy::EntropyProviders;
 use crate::RolloutRecorder;
 use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
@@ -36,4 +37,5 @@ pub(crate) struct SessionServices {
     pub(crate) agent_control: AgentControl,
     pub(crate) state_db: Option<StateDbHandle>,
     pub(crate) transport_manager: TransportManager,
+    pub(crate) entropy: EntropyProviders,
 }

@@ -21,6 +21,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
+use crate::entropy::EntropyProviders;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
 use crate::features::Features;
@@ -923,6 +924,7 @@ impl Session {
             agent_control,
             state_db: state_db_ctx.clone(),
             transport_manager: TransportManager::new(),
+            entropy: EntropyProviders::default(),
         };
 
         let sess = Arc::new(Session {
@@ -5331,6 +5333,7 @@ mod tests {
             agent_control,
             state_db: None,
             transport_manager: TransportManager::new(),
+            entropy: EntropyProviders::default(),
         };
 
         let turn_context = Session::make_turn_context(
@@ -5451,6 +5454,7 @@ mod tests {
             agent_control,
             state_db: None,
             transport_manager: TransportManager::new(),
+            entropy: EntropyProviders::default(),
         };
 
         let turn_context = Arc::new(Session::make_turn_context(
