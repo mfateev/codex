@@ -70,6 +70,17 @@ use crate::tools::spec::create_tools_json_for_chat_completions_api;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::transport_manager::TransportManager;
 
+/// Trait for streaming model responses.
+///
+/// This trait abstracts the streaming model interface, allowing different
+/// implementations to be injected (e.g., for Temporal workflow integration
+/// or testing purposes).
+#[async_trait::async_trait]
+pub trait ModelStreamer: Send {
+    /// Stream a model response for the given prompt.
+    async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream>;
+}
+
 pub const WEB_SEARCH_ELIGIBLE_HEADER: &str = "x-oai-web-search-eligible";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 
@@ -664,6 +675,14 @@ impl ModelClientSession {
         let telemetry = Arc::new(ApiTelemetry::new(self.state.otel_manager.clone()));
         let websocket_telemetry: Arc<dyn WebsocketTelemetry> = telemetry;
         websocket_telemetry
+    }
+}
+
+#[async_trait::async_trait]
+impl ModelStreamer for ModelClientSession {
+    async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream> {
+        // Delegate to the inherent method.
+        ModelClientSession::stream(self, prompt).await
     }
 }
 
