@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use futures::future::BoxFuture;
 use tokio::sync::RwLock;
 use tokio_util::either::Either;
 use tokio_util::sync::CancellationToken;
@@ -19,6 +20,19 @@ use crate::tools::router::ToolCall;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+
+/// Trait for handling tool calls from the agentic loop.
+///
+/// This trait abstracts the tool dispatch interface, allowing different
+/// implementations to be injected (e.g., for Temporal workflow integration
+/// or testing purposes).
+pub trait ToolCallHandler: Send + Sync {
+    fn handle_tool_call(
+        &self,
+        call: ToolCall,
+        cancellation_token: CancellationToken,
+    ) -> BoxFuture<'static, Result<ResponseInputItem, CodexErr>>;
+}
 
 #[derive(Clone)]
 pub(crate) struct ToolCallRuntime {
@@ -46,11 +60,11 @@ impl ToolCallRuntime {
     }
 
     #[instrument(level = "trace", skip_all, fields(call = ?call))]
-    pub(crate) fn handle_tool_call(
-        self,
+    fn dispatch_tool_call(
+        &self,
         call: ToolCall,
         cancellation_token: CancellationToken,
-    ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
+    ) -> BoxFuture<'static, Result<ResponseInputItem, CodexErr>> {
         let supports_parallel = self.router.tool_supports_parallel(&call.tool_name);
 
         let router = Arc::clone(&self.router);
@@ -91,17 +105,29 @@ impl ToolCallRuntime {
                 }
             }));
 
-        async move {
-            match handle.await {
-                Ok(Ok(response)) => Ok(response),
-                Ok(Err(FunctionCallError::Fatal(message))) => Err(CodexErr::Fatal(message)),
-                Ok(Err(other)) => Err(CodexErr::Fatal(other.to_string())),
-                Err(err) => Err(CodexErr::Fatal(format!(
-                    "tool task failed to receive: {err:?}"
-                ))),
+        Box::pin(
+            async move {
+                match handle.await {
+                    Ok(Ok(response)) => Ok(response),
+                    Ok(Err(FunctionCallError::Fatal(message))) => Err(CodexErr::Fatal(message)),
+                    Ok(Err(other)) => Err(CodexErr::Fatal(other.to_string())),
+                    Err(err) => Err(CodexErr::Fatal(format!(
+                        "tool task failed to receive: {err:?}"
+                    ))),
+                }
             }
-        }
-        .in_current_span()
+            .in_current_span(),
+        )
+    }
+}
+
+impl ToolCallHandler for ToolCallRuntime {
+    fn handle_tool_call(
+        &self,
+        call: ToolCall,
+        cancellation_token: CancellationToken,
+    ) -> BoxFuture<'static, Result<ResponseInputItem, CodexErr>> {
+        self.dispatch_tool_call(call, cancellation_token)
     }
 }
 

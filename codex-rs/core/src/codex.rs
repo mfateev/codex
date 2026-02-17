@@ -195,6 +195,8 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::client::ModelStreamer;
+use crate::tools::parallel::ToolCallHandler;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
@@ -3657,13 +3659,20 @@ async fn run_sampling_request(
         output_schema: turn_context.final_output_json_schema.clone(),
     };
 
+    let tool_handler = ToolCallRuntime::new(
+        Arc::clone(&router),
+        Arc::clone(&sess),
+        Arc::clone(&turn_context),
+        Arc::clone(&turn_diff_tracker),
+    );
+
     let mut retries = 0;
     loop {
         let err = match try_run_sampling_request(
-            Arc::clone(&router),
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             client_session,
+            &tool_handler,
             Arc::clone(&turn_diff_tracker),
             &prompt,
             cancellation_token.child_token(),
@@ -4142,10 +4151,10 @@ async fn drain_in_flight(
     )
 )]
 async fn try_run_sampling_request(
-    router: Arc<ToolRouter>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    client_session: &mut ModelClientSession,
+    model_streamer: &mut dyn ModelStreamer,
+    tool_handler: &dyn ToolCallHandler,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,
     cancellation_token: CancellationToken,
@@ -4176,18 +4185,11 @@ async fn try_run_sampling_request(
     );
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = client_session
+    let mut stream = model_streamer
         .stream(prompt)
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
         .await??;
-
-    let tool_runtime = ToolCallRuntime::new(
-        Arc::clone(&router),
-        Arc::clone(&sess),
-        Arc::clone(&turn_context),
-        Arc::clone(&turn_diff_tracker),
-    );
     let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
         FuturesOrdered::new();
     let mut needs_follow_up = false;
@@ -4264,7 +4266,7 @@ async fn try_run_sampling_request(
                 let mut ctx = HandleOutputCtx {
                     sess: sess.clone(),
                     turn_context: turn_context.clone(),
-                    tool_runtime: tool_runtime.clone(),
+                    tool_handler,
                     cancellation_token: cancellation_token.child_token(),
                 };
 
@@ -6069,5 +6071,198 @@ mod tests {
         );
 
         pretty_assertions::assert_eq!(output, expected);
+    }
+
+    // ── Mock-based interception tests ────────────────────────────────────
+
+    use crate::client::ModelStreamer;
+    use crate::client_common::ResponseStream;
+    use crate::tools::parallel::ToolCallHandler;
+    use crate::tools::router::ToolCall;
+    use tokio::sync::Mutex as TokioMutex;
+
+    /// A mock `ModelStreamer` that sends a sequence of canned `ResponseEvent`s.
+    struct MockModelStreamer {
+        events: Vec<ResponseEvent>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelStreamer for MockModelStreamer {
+        async fn stream(
+            &mut self,
+            _prompt: &crate::client_common::Prompt,
+        ) -> crate::error::Result<ResponseStream> {
+            let (tx, rx) = tokio::sync::mpsc::channel(self.events.len() + 1);
+            for event in self.events.drain(..) {
+                tx.send(Ok(event)).await.unwrap();
+            }
+            Ok(ResponseStream { rx_event: rx })
+        }
+    }
+
+    /// A mock `ToolCallHandler` that records calls and returns canned output.
+    struct MockToolCallHandler {
+        calls: Arc<TokioMutex<Vec<ToolCall>>>,
+        response: ResponseInputItem,
+    }
+
+    impl ToolCallHandler for MockToolCallHandler {
+        fn handle_tool_call(
+            &self,
+            call: ToolCall,
+            _cancellation_token: CancellationToken,
+        ) -> futures::future::BoxFuture<'static, Result<ResponseInputItem, CodexErr>> {
+            let calls = Arc::clone(&self.calls);
+            let response = self.response.clone();
+            Box::pin(async move {
+                calls.lock().await.push(call);
+                Ok(response)
+            })
+        }
+    }
+
+    /// Test 7a: MockModelStreamer — verifies LLM interception.
+    ///
+    /// A mock `ModelStreamer` that returns an assistant message (no tool call)
+    /// drives `try_run_sampling_request` to completion with `needs_follow_up == false`.
+    #[tokio::test]
+    async fn mock_model_streamer_no_tool_call() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+
+        let assistant_item = ResponseItem::Message {
+            id: Some("msg_001".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "Hello from the mock!".to_string(),
+            }],
+            end_turn: None,
+        };
+
+        let mut mock_streamer = MockModelStreamer {
+            events: vec![
+                ResponseEvent::OutputItemAdded(assistant_item.clone()),
+                ResponseEvent::OutputItemDone(assistant_item),
+                ResponseEvent::Completed {
+                    response_id: "resp_001".to_string(),
+                    token_usage: None,
+                },
+            ],
+        };
+
+        let router = Arc::new(ToolRouter::from_config(
+            &tc.tools_config,
+            None,
+            &[],
+        ));
+
+        // Use a no-op tool handler since no tool calls are expected.
+        let tool_handler = MockToolCallHandler {
+            calls: Arc::new(TokioMutex::new(Vec::new())),
+            response: ResponseInputItem::FunctionCallOutput {
+                call_id: String::new(),
+                output: FunctionCallOutputPayload::default(),
+            },
+        };
+
+        let prompt = crate::client_common::Prompt {
+            input: vec![user_message("test")],
+            tools: router.specs(),
+            parallel_tool_calls: false,
+            base_instructions: codex_protocol::models::BaseInstructions::default(),
+            personality: tc.personality,
+            output_schema: None,
+        };
+
+        let result = try_run_sampling_request(
+            sess,
+            tc,
+            &mut mock_streamer,
+            &tool_handler,
+            turn_diff_tracker,
+            &prompt,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("should succeed");
+
+        assert!(!result.needs_follow_up, "no tool call means no follow-up");
+        assert_eq!(
+            result.last_agent_message.as_deref(),
+            Some("Hello from the mock!")
+        );
+    }
+
+    /// Test 7b: MockToolCallHandler — verifies tool interception.
+    ///
+    /// A mock `ModelStreamer` returns a function-call response, and a
+    /// `MockToolCallHandler` captures the call. `needs_follow_up` should be true.
+    #[tokio::test]
+    async fn mock_tool_handler_captures_call() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+
+        let function_call_item = ResponseItem::FunctionCall {
+            id: Some("fc_001".to_string()),
+            name: "my_tool".to_string(),
+            arguments: r#"{"key":"value"}"#.to_string(),
+            call_id: "call_001".to_string(),
+        };
+
+        let mut mock_streamer = MockModelStreamer {
+            events: vec![
+                ResponseEvent::OutputItemDone(function_call_item),
+                ResponseEvent::Completed {
+                    response_id: "resp_002".to_string(),
+                    token_usage: None,
+                },
+            ],
+        };
+
+        let router = Arc::new(ToolRouter::from_config(
+            &tc.tools_config,
+            None,
+            &[],
+        ));
+
+        let captured_calls = Arc::new(TokioMutex::new(Vec::new()));
+        let tool_handler = MockToolCallHandler {
+            calls: Arc::clone(&captured_calls),
+            response: ResponseInputItem::FunctionCallOutput {
+                call_id: "call_001".to_string(),
+                output: FunctionCallOutputPayload {
+                    content: "tool result".to_string(),
+                    ..Default::default()
+                },
+            },
+        };
+
+        let prompt = crate::client_common::Prompt {
+            input: vec![user_message("run the tool")],
+            tools: router.specs(),
+            parallel_tool_calls: false,
+            base_instructions: codex_protocol::models::BaseInstructions::default(),
+            personality: tc.personality,
+            output_schema: None,
+        };
+
+        let result = try_run_sampling_request(
+            sess,
+            tc,
+            &mut mock_streamer,
+            &tool_handler,
+            turn_diff_tracker,
+            &prompt,
+            CancellationToken::new(),
+        )
+        .await
+        .expect("should succeed");
+
+        assert!(result.needs_follow_up, "tool call means follow-up needed");
+
+        let calls = captured_calls.lock().await;
+        assert_eq!(calls.len(), 1, "exactly one tool call captured");
+        assert_eq!(calls[0].tool_name, "my_tool");
+        assert_eq!(calls[0].call_id, "call_001");
     }
 }

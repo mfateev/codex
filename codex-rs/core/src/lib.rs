@@ -153,6 +153,8 @@ pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;
 pub use client_common::ResponseEvent;
 pub use client_common::ResponseStream;
+pub use tools::parallel::ToolCallHandler;
+pub use tools::router::ToolCall;
 pub use codex_protocol::models::ContentItem;
 pub use codex_protocol::models::LocalShellAction;
 pub use codex_protocol::models::LocalShellExecAction;

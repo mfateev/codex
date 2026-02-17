@@ -12,7 +12,7 @@ use crate::error::Result;
 use crate::function_tool::FunctionCallError;
 use crate::parse_turn_item;
 use crate::proposed_plan_parser::strip_proposed_plan_blocks;
-use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::parallel::ToolCallHandler;
 use crate::tools::router::ToolRouter;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -34,16 +34,16 @@ pub(crate) struct OutputItemResult {
     pub tool_future: Option<InFlightFuture<'static>>,
 }
 
-pub(crate) struct HandleOutputCtx {
+pub(crate) struct HandleOutputCtx<'a> {
     pub sess: Arc<Session>,
     pub turn_context: Arc<TurnContext>,
-    pub tool_runtime: ToolCallRuntime,
+    pub tool_handler: &'a dyn ToolCallHandler,
     pub cancellation_token: CancellationToken,
 }
 
 #[instrument(level = "trace", skip_all)]
 pub(crate) async fn handle_output_item_done(
-    ctx: &mut HandleOutputCtx,
+    ctx: &mut HandleOutputCtx<'_>,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {
@@ -66,11 +66,8 @@ pub(crate) async fn handle_output_item_done(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_future: InFlightFuture<'static> = Box::pin(
-                ctx.tool_runtime
-                    .clone()
-                    .handle_tool_call(call, cancellation_token),
-            );
+            let tool_future: InFlightFuture<'static> =
+                ctx.tool_handler.handle_tool_call(call, cancellation_token);
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
