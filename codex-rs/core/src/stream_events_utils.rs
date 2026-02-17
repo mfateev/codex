@@ -14,6 +14,7 @@ use crate::parse_turn_item;
 use crate::proposed_plan_parser::strip_proposed_plan_blocks;
 use crate::tools::parallel::ToolCallHandler;
 use crate::tools::router::ToolRouter;
+use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
@@ -97,15 +98,14 @@ pub(crate) async fn handle_output_item_done(
         Err(FunctionCallError::MissingLocalShellCallId) => {
             let msg = "LocalShellCall without call_id or id";
             ctx.turn_context
-                .client
-                .get_otel_manager()
+                .otel_manager
                 .log_tool_failed("local_shell", msg);
             tracing::error!(msg);
 
             let response = ResponseInputItem::FunctionCallOutput {
                 call_id: String::new(),
                 output: FunctionCallOutputPayload {
-                    content: msg.to_string(),
+                    body: FunctionCallOutputBody::Text(msg.to_string()),
                     ..Default::default()
                 },
             };
@@ -128,7 +128,7 @@ pub(crate) async fn handle_output_item_done(
             let response = ResponseInputItem::FunctionCallOutput {
                 call_id: String::new(),
                 output: FunctionCallOutputPayload {
-                    content: message,
+                    body: FunctionCallOutputBody::Text(message),
                     ..Default::default()
                 },
             };
@@ -233,9 +233,8 @@ pub(crate) fn response_input_to_response_item(input: &ResponseInputItem) -> Opti
             let output = match result {
                 Ok(call_tool_result) => FunctionCallOutputPayload::from(call_tool_result),
                 Err(err) => FunctionCallOutputPayload {
-                    content: err.clone(),
+                    body: FunctionCallOutputBody::Text(err.clone()),
                     success: Some(false),
-                    ..Default::default()
                 },
             };
             Some(ResponseItem::FunctionCallOutput {
