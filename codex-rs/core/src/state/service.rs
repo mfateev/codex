@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use crate::AuthManager;
-use crate::entropy::EntropyProviders;
 use crate::RolloutRecorder;
 use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
@@ -44,7 +43,6 @@ pub(crate) struct SessionServices {
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
     pub(crate) network_approval: Arc<NetworkApprovalService>,
     pub(crate) state_db: Option<StateDbHandle>,
-    pub(crate) entropy: EntropyProviders,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
 }

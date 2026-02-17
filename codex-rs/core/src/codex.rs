@@ -22,7 +22,6 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
-use crate::entropy::EntropyProviders;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
@@ -1287,7 +1286,7 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
-            entropy: EntropyProviders::default(),
+
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
@@ -7333,7 +7332,7 @@ mod tests {
             network_proxy: None,
             network_approval: Arc::clone(&network_approval),
             state_db: None,
-            entropy: EntropyProviders::default(),
+
             model_client: ModelClient::new(
                 Some(auth_manager.clone()),
                 conversation_id,
@@ -7482,7 +7481,7 @@ mod tests {
             network_proxy: None,
             network_approval: Arc::clone(&network_approval),
             state_db: None,
-            entropy: EntropyProviders::default(),
+
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
