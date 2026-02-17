@@ -105,8 +105,51 @@ use crate::tools::spec::create_tools_json_for_responses_api;
 /// or testing purposes).
 #[async_trait::async_trait]
 pub trait ModelStreamer: Send {
-    /// Stream a model response for the given prompt.
-    async fn stream(&mut self, prompt: &Prompt) -> Result<ResponseStream>;
+    /// Stream a model response for the given prompt with per-turn settings.
+    async fn stream(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        otel_manager: &OtelManager,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        turn_metadata_header: Option<&str>,
+    ) -> Result<ResponseStream>;
+
+    /// Attempt to switch the transport to a fallback (e.g., HTTP when WebSocket fails).
+    ///
+    /// Returns `true` if fallback was activated. The default implementation is a no-op
+    /// that always returns `false`, appropriate for non-WebSocket streamers.
+    fn try_switch_fallback_transport(
+        &mut self,
+        _otel_manager: &OtelManager,
+        _model_info: &ModelInfo,
+    ) -> bool {
+        false
+    }
+}
+
+#[async_trait::async_trait]
+impl ModelStreamer for ModelClientSession {
+    async fn stream(
+        &mut self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        otel_manager: &OtelManager,
+        effort: Option<ReasoningEffortConfig>,
+        summary: ReasoningSummaryConfig,
+        turn_metadata_header: Option<&str>,
+    ) -> Result<ResponseStream> {
+        ModelClientSession::stream(self, prompt, model_info, otel_manager, effort, summary, turn_metadata_header).await
+    }
+
+    fn try_switch_fallback_transport(
+        &mut self,
+        otel_manager: &OtelManager,
+        model_info: &ModelInfo,
+    ) -> bool {
+        ModelClientSession::try_switch_fallback_transport(self, otel_manager, model_info)
+    }
 }
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";

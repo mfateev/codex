@@ -16,8 +16,8 @@ use codex_protocol::models::is_local_image_close_tag_text;
 use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::user_input::UserInput;
 use tracing::warn;
-use uuid::Uuid;
 
+use crate::entropy::entropy_uuid;
 use crate::instructions::SkillInstructions;
 use crate::instructions::UserInstructions;
 use crate::session_prefix::is_session_prefix;
@@ -89,7 +89,7 @@ fn parse_agent_message(
             }
         }
     }
-    let id = id.cloned().unwrap_or_else(|| Uuid::new_v4().to_string());
+    let id = id.cloned().unwrap_or_else(entropy_uuid);
     AgentMessageItem { id, content, phase }
 }
 

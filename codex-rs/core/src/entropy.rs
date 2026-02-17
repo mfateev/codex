@@ -101,6 +101,35 @@ impl Debug for EntropyProviders {
     }
 }
 
+tokio::task_local! {
+    /// Task-local entropy providers for the agentic loop.
+    ///
+    /// Scoped at the entry point of the loop so that all code within has access
+    /// to the configured randomness and clock sources. The in-process path uses
+    /// `SystemRandomSource`/`SystemClock` (the defaults). A Temporal workflow
+    /// provides deterministic implementations backed by workflow context.
+    pub static ENTROPY: EntropyProviders;
+}
+
+/// Helper to access the task-local random UUID generator.
+///
+/// Falls back to `Uuid::new_v4()` when called outside a scoped context (e.g.,
+/// in tests or code paths that have not been migrated yet).
+pub fn entropy_uuid() -> String {
+    ENTROPY
+        .try_with(|e| e.random.uuid())
+        .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
+}
+
+/// Helper to access the task-local monotonic clock.
+///
+/// Falls back to `Instant::now()` when called outside a scoped context.
+pub fn entropy_now() -> Instant {
+    ENTROPY
+        .try_with(|e| e.clock.now())
+        .unwrap_or_else(|_| Instant::now())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

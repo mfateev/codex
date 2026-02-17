@@ -110,6 +110,13 @@ use uuid::Uuid;
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
+use crate::client::ModelStreamer;
+use crate::entropy::ENTROPY;
+use crate::entropy::EntropyProviders;
+use crate::session_io::ChannelEventSink;
+use crate::session_io::EventSink;
+use crate::session_io::RolloutFileStorage;
+use crate::session_io::StorageBackend;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::codex_thread::ThreadConfigSnapshot;
@@ -526,6 +533,10 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+    /// Pluggable event delivery backend.
+    event_sink: Arc<dyn EventSink>,
+    /// Pluggable rollout persistence backend.
+    storage: Arc<dyn StorageBackend>,
 }
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
@@ -1271,7 +1282,7 @@ impl Session {
             hooks: Hooks::new(HooksConfig {
                 legacy_notify_argv: config.notify.clone(),
             }),
-            rollout: Mutex::new(rollout_recorder),
+            rollout: Arc::new(Mutex::new(rollout_recorder)),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -1316,6 +1327,9 @@ impl Session {
         );
         state.set_startup_regular_task(startup_regular_task);
 
+        let event_sink: Arc<dyn EventSink> = Arc::new(ChannelEventSink::new(tx_event.clone()));
+        let storage: Arc<dyn StorageBackend> =
+            Arc::new(RolloutFileStorage::new(Arc::clone(&services.rollout)));
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
@@ -1327,6 +1341,8 @@ impl Session {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            event_sink,
+            storage,
         });
         if let Some(network_policy_decider_session) = network_policy_decider_session {
             let mut guard = network_policy_decider_session.write().await;
@@ -1434,15 +1450,7 @@ impl Session {
 
     /// Ensure all rollout writes are durably flushed.
     pub(crate) async fn flush_rollout(&self) {
-        let recorder = {
-            let guard = self.services.rollout.lock().await;
-            guard.clone()
-        };
-        if let Some(rec) = recorder
-            && let Err(e) = rec.flush().await
-        {
-            warn!("failed to flush rollout recorder: {e}");
-        }
+        self.storage.flush().await;
     }
 
     pub(crate) async fn ensure_rollout_materialized(&self) {
@@ -2158,10 +2166,8 @@ impl Session {
         }
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
-        self.persist_rollout_items(&rollout_items).await;
-        if let Err(e) = self.tx_event.send(event).await {
-            debug!("dropping event because channel is closed: {e}");
-        }
+        self.storage.save(&rollout_items).await;
+        self.event_sink.emit_event(event).await;
     }
 
     /// Persist the event to the rollout file, flush it, and only then deliver it to clients.
@@ -2174,12 +2180,11 @@ impl Session {
         if let Some(status) = agent_status_from_event(&event.msg) {
             self.agent_status.send_replace(status);
         }
-        self.persist_rollout_items(&[RolloutItem::EventMsg(event.msg.clone())])
+        self.storage
+            .save(&[RolloutItem::EventMsg(event.msg.clone())])
             .await;
-        self.flush_rollout().await;
-        if let Err(e) = self.tx_event.send(event).await {
-            debug!("dropping event because channel is closed: {e}");
-        }
+        self.storage.flush().await;
+        self.event_sink.emit_event(event).await;
     }
 
     pub(crate) async fn emit_turn_item_started(&self, turn_context: &TurnContext, item: &TurnItem) {
@@ -2687,15 +2692,7 @@ impl Session {
     }
 
     pub(crate) async fn persist_rollout_items(&self, items: &[RolloutItem]) {
-        let recorder = {
-            let guard = self.services.rollout.lock().await;
-            guard.clone()
-        };
-        if let Some(rec) = recorder
-            && let Err(e) = rec.record_items(items).await
-        {
-            error!("failed to record rollout items: {e:#}");
-        }
+        self.storage.save(items).await;
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {
@@ -4293,6 +4290,24 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
+    ENTROPY
+        .scope(EntropyProviders::default(), run_turn_inner(
+            sess,
+            turn_context,
+            input,
+            prewarmed_client_session,
+            cancellation_token,
+        ))
+        .await
+}
+
+async fn run_turn_inner(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    input: Vec<UserInput>,
+    prewarmed_client_session: Option<ModelClientSession>,
+    cancellation_token: CancellationToken,
+) -> Option<String> {
     if input.is_empty() {
         return None;
     }
@@ -4867,7 +4882,7 @@ async fn run_sampling_request(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    client_session: &mut ModelClientSession,
+    model_streamer: &mut dyn ModelStreamer,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
@@ -4911,7 +4926,7 @@ async fn run_sampling_request(
         let err = match try_run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
-            client_session,
+            model_streamer,
             &tool_handler,
             turn_metadata_header,
             Arc::clone(&turn_diff_tracker),
@@ -4944,7 +4959,7 @@ async fn run_sampling_request(
         // Use the configured provider-specific stream retry budget.
         let max_retries = turn_context.provider.stream_max_retries();
         if retries >= max_retries
-            && client_session
+            && model_streamer
                 .try_switch_fallback_transport(&turn_context.otel_manager, &turn_context.model_info)
         {
             sess.send_event(
@@ -5479,7 +5494,7 @@ async fn drain_in_flight(
 async fn try_run_sampling_request(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    client_session: &mut ModelClientSession,
+    model_streamer: &mut dyn ModelStreamer,
     tool_handler: &dyn ToolCallHandler,
     turn_metadata_header: Option<&str>,
     turn_diff_tracker: SharedTurnDiffTracker,
@@ -5500,7 +5515,7 @@ async fn try_run_sampling_request(
     );
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = client_session
+    let mut stream = model_streamer
         .stream(
             prompt,
             &turn_context.model_info,
@@ -7317,7 +7332,7 @@ mod tests {
             hooks: Hooks::new(HooksConfig {
                 legacy_notify_argv: config.notify.clone(),
             }),
-            rollout: Mutex::new(None),
+            rollout: Arc::new(Mutex::new(None)),
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -7365,6 +7380,9 @@ mod tests {
             Arc::clone(&js_repl),
         );
 
+        let event_sink: Arc<dyn EventSink> = Arc::new(ChannelEventSink::new(tx_event.clone()));
+        let storage: Arc<dyn StorageBackend> =
+            Arc::new(RolloutFileStorage::new(Arc::clone(&services.rollout)));
         let session = Session {
             conversation_id,
             tx_event,
@@ -7376,6 +7394,8 @@ mod tests {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            event_sink,
+            storage,
         };
 
         (session, turn_context)
@@ -7466,7 +7486,7 @@ mod tests {
             hooks: Hooks::new(HooksConfig {
                 legacy_notify_argv: config.notify.clone(),
             }),
-            rollout: Mutex::new(None),
+            rollout: Arc::new(Mutex::new(None)),
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -7514,6 +7534,9 @@ mod tests {
             Arc::clone(&js_repl),
         ));
 
+        let event_sink: Arc<dyn EventSink> = Arc::new(ChannelEventSink::new(tx_event.clone()));
+        let storage: Arc<dyn StorageBackend> =
+            Arc::new(RolloutFileStorage::new(Arc::clone(&services.rollout)));
         let session = Arc::new(Session {
             conversation_id,
             tx_event,
@@ -7525,6 +7548,8 @@ mod tests {
             services,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
+            event_sink,
+            storage,
         });
 
         (session, turn_context, rx_event)
