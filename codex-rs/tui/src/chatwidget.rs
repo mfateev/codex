@@ -217,6 +217,8 @@ mod agent;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 pub(crate) use self::agent::spawn_op_forwarder;
+#[allow(unused_imports)] // entry point for alternative backends (e.g. Temporal)
+pub(crate) use self::agent::wire_session;
 mod session_header;
 use self::session_header::SessionHeader;
 mod skills;

@@ -1,4 +1,5 @@
 use crate::agent::AgentStatus;
+use crate::agent_session::AgentSession;
 use crate::codex::Codex;
 use crate::codex::SteerInputError;
 use crate::error::Result as CodexResult;
@@ -87,5 +88,16 @@ impl CodexThread {
 
     pub fn enabled(&self, feature: Feature) -> bool {
         self.codex.enabled(feature)
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentSession for CodexThread {
+    async fn submit(&self, op: Op) -> CodexResult<String> {
+        self.submit(op).await
+    }
+
+    async fn next_event(&self) -> CodexResult<Event> {
+        self.next_event().await
     }
 }

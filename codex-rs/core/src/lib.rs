@@ -19,6 +19,8 @@ mod compact_remote;
 pub use codex_thread::CodexThread;
 pub use codex_thread::ThreadConfigSnapshot;
 mod agent;
+pub mod agent_session;
+pub use agent_session::AgentSession;
 mod codex_delegate;
 mod command_canonicalization;
 pub mod config;
