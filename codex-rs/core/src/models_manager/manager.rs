@@ -371,7 +371,7 @@ impl ModelsManager {
     }
 
     /// Get model identifier without consulting remote state or cache.
-    pub(crate) fn get_model_offline_for_tests(model: Option<&str>) -> String {
+    pub fn get_model_offline_for_tests(model: Option<&str>) -> String {
         if let Some(model) = model {
             return model.to_string();
         }
@@ -385,7 +385,7 @@ impl ModelsManager {
     }
 
     /// Build `ModelInfo` without consulting remote state or cache.
-    pub(crate) fn construct_model_info_offline_for_tests(
+    pub fn construct_model_info_offline_for_tests(
         model: &str,
         config: &Config,
     ) -> ModelInfo {

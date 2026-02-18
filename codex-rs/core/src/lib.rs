@@ -180,6 +180,8 @@ pub use codex::Session;
 pub use codex::TurnContext;
 pub use codex::SamplingRequestResult;
 pub use codex::try_run_sampling_request;
+pub use turn_diff_tracker::TurnDiffTracker;
+pub use tools::context::SharedTurnDiffTracker;
 pub use codex_protocol::models::ContentItem;
 pub use codex_protocol::models::LocalShellAction;
 pub use codex_protocol::models::LocalShellExecAction;
