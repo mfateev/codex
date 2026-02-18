@@ -2926,6 +2926,17 @@ impl Session {
         state.clone_history()
     }
 
+    /// Record items into conversation history (public for external harnesses).
+    pub async fn record_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {
+        self.record_conversation_items(turn_context, items).await;
+    }
+
+    /// Return the current conversation history as prompt input items.
+    pub async fn history_items(&self) -> Vec<ResponseItem> {
+        let state = self.state.lock().await;
+        state.clone_history().raw_items().to_vec()
+    }
+
     pub(crate) async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
