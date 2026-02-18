@@ -1417,14 +1417,48 @@ impl Config {
         Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
     }
 
+    /// Construct a minimal `Config` for an external harness (e.g. Temporal).
+    ///
+    /// No filesystem, environment-variable, or network I/O is performed.
+    /// The returned `Config` uses built-in defaults for every setting.
+    pub fn for_harness(codex_home: PathBuf) -> std::io::Result<Self> {
+        let overrides = ConfigOverrides {
+            cwd: Some(codex_home.clone()),
+            ..Default::default()
+        };
+        Self::load_config_with_layer_stack_inner(
+            ConfigToml::default(),
+            overrides,
+            codex_home,
+            ConfigLayerStack::default(),
+            None,
+        )
+    }
+
     pub(crate) fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: PathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
-        let requirements = config_layer_stack.requirements().clone();
         let user_instructions = Self::load_instructions(Some(&codex_home));
+        Self::load_config_with_layer_stack_inner(
+            cfg,
+            overrides,
+            codex_home,
+            config_layer_stack,
+            user_instructions,
+        )
+    }
+
+    fn load_config_with_layer_stack_inner(
+        cfg: ConfigToml,
+        overrides: ConfigOverrides,
+        codex_home: PathBuf,
+        config_layer_stack: ConfigLayerStack,
+        user_instructions: Option<String>,
+    ) -> std::io::Result<Self> {
+        let requirements = config_layer_stack.requirements().clone();
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
