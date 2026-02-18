@@ -212,13 +212,13 @@ pub(crate) mod tools {
 
     #[derive(Debug, Clone, Serialize, PartialEq)]
     pub struct ResponsesApiTool {
-        pub(crate) name: String,
-        pub(crate) description: String,
+        pub name: String,
+        pub description: String,
         /// TODO: Validation. When strict is set to true, the JSON schema,
         /// `required` and `additional_properties` must be present. All fields in
         /// `properties` must be present in `required`.
-        pub(crate) strict: bool,
-        pub(crate) parameters: JsonSchema,
+        pub strict: bool,
+        pub parameters: JsonSchema,
     }
 }
 
