@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 
 use crate::entropy::entropy_now;
@@ -27,12 +28,18 @@ use codex_protocol::models::ResponseInputItem;
 /// This trait abstracts the tool dispatch interface, allowing different
 /// implementations to be injected (e.g., for Temporal workflow integration
 /// or testing purposes).
+///
+/// The associated `Future` type allows the in-process path to use
+/// `BoxFuture<'static, …>` (which is `Send`) while a Temporal harness can
+/// use `LocalBoxFuture<'static, …>` (which is `!Send`).
 pub trait ToolCallHandler {
+    type Future: Future<Output = Result<ResponseInputItem, CodexErr>> + 'static;
+
     fn handle_tool_call(
         &self,
         call: ToolCall,
         cancellation_token: CancellationToken,
-    ) -> BoxFuture<'static, Result<ResponseInputItem, CodexErr>>;
+    ) -> Self::Future;
 }
 
 #[derive(Clone)]
@@ -129,11 +136,13 @@ impl ToolCallRuntime {
 }
 
 impl ToolCallHandler for ToolCallRuntime {
+    type Future = BoxFuture<'static, Result<ResponseInputItem, CodexErr>>;
+
     fn handle_tool_call(
         &self,
         call: ToolCall,
         cancellation_token: CancellationToken,
-    ) -> BoxFuture<'static, Result<ResponseInputItem, CodexErr>> {
+    ) -> Self::Future {
         self.dispatch_tool_call(call, cancellation_token)
     }
 }

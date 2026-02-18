@@ -30,10 +30,10 @@ pub struct Prompt {
 
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
-    pub(crate) tools: Vec<ToolSpec>,
+    pub tools: Vec<ToolSpec>,
 
     /// Whether parallel tool calls are permitted for this prompt.
-    pub(crate) parallel_tool_calls: bool,
+    pub parallel_tool_calls: bool,
 
     pub base_instructions: BaseInstructions,
 
@@ -167,7 +167,7 @@ pub(crate) mod tools {
     /// Responses API.
     #[derive(Debug, Clone, Serialize, PartialEq)]
     #[serde(tag = "type")]
-    pub(crate) enum ToolSpec {
+    pub enum ToolSpec {
         #[serde(rename = "function")]
         Function(ResponsesApiTool),
         #[serde(rename = "local_shell")]
@@ -224,6 +224,16 @@ pub(crate) mod tools {
 
 pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
+}
+
+impl ResponseStream {
+    /// Create a `ResponseStream` from an mpsc receiver.
+    ///
+    /// This is intended for external harnesses (e.g. Temporal) that build
+    /// a stream from collected activity results rather than a live WebSocket.
+    pub fn from_receiver(rx: mpsc::Receiver<Result<ResponseEvent>>) -> Self {
+        Self { rx_event: rx }
+    }
 }
 
 impl Stream for ResponseStream {

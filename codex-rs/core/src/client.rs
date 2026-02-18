@@ -103,7 +103,12 @@ use crate::tools::spec::create_tools_json_for_responses_api;
 /// This trait abstracts the streaming model interface, allowing different
 /// implementations to be injected (e.g., for Temporal workflow integration
 /// or testing purposes).
-#[async_trait::async_trait]
+///
+/// Uses native async fn (RPITIT) so that each implementation's returned
+/// future can have its own Send-ness: `ModelClientSession` produces a
+/// `Send` future (compatible with `tokio::spawn`), while a Temporal
+/// workflow streamer produces a `!Send` future (runs on a `LocalSet`).
+#[allow(async_fn_in_trait)]
 pub trait ModelStreamer {
     /// Stream a model response for the given prompt with per-turn settings.
     async fn stream(
@@ -129,7 +134,6 @@ pub trait ModelStreamer {
     }
 }
 
-#[async_trait::async_trait]
 impl ModelStreamer for ModelClientSession {
     async fn stream(
         &mut self,

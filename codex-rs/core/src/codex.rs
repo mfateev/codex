@@ -79,7 +79,6 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
-use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use rmcp::model::ListResourceTemplatesResult;
@@ -520,7 +519,7 @@ impl Codex {
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
-pub(crate) struct Session {
+pub struct Session {
     pub(crate) conversation_id: ThreadId,
     tx_event: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
@@ -540,7 +539,7 @@ pub(crate) struct Session {
 }
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
-pub(crate) struct TurnContext {
+pub struct TurnContext {
     pub(crate) sub_id: String,
     pub(crate) config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
@@ -576,6 +575,86 @@ pub(crate) struct TurnContext {
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
 }
 impl TurnContext {
+    /// Create a minimal `TurnContext` for external harnesses.
+    ///
+    /// Populates model info and config with the provided values, and defaults
+    /// everything else (no auth, no-op OTel, default tools config, etc.).
+    pub fn new_minimal(
+        sub_id: String,
+        model_info: ModelInfo,
+        config: Arc<Config>,
+    ) -> Self {
+        use crate::tools::spec::{ToolsConfig, ToolsConfigParams};
+        use crate::turn_metadata::TurnMetadataState;
+
+        let otel_manager = OtelManager::new(
+            ThreadId::default(),
+            model_info.slug.as_str(),
+            model_info.slug.as_str(),
+            None,
+            None,
+            None,
+            "harness".to_string(),
+            false,
+            "harness".to_string(),
+            SessionSource::Exec,
+        );
+        let reasoning_effort = config.model_reasoning_effort;
+        let reasoning_summary = config.model_reasoning_summary;
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model: model_info.slug.clone(),
+                reasoning_effort,
+                developer_instructions: None,
+            },
+        };
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &config.features,
+            web_search_mode: None,
+        });
+        let turn_metadata_state = Arc::new(TurnMetadataState::new(
+            sub_id.clone(),
+            config.cwd.clone(),
+            &config.permissions.sandbox_policy.get(),
+            WindowsSandboxLevel::from_config(&config),
+            false,
+        ));
+        TurnContext {
+            sub_id,
+            config: config.clone(),
+            auth_manager: None,
+            model_info: model_info.clone(),
+            otel_manager,
+            provider: config.model_provider.clone(),
+            reasoning_effort,
+            reasoning_summary,
+            session_source: SessionSource::Exec,
+            cwd: config.cwd.clone(),
+            developer_instructions: config.developer_instructions.clone(),
+            compact_prompt: config.compact_prompt.clone(),
+            user_instructions: config.user_instructions.clone(),
+            collaboration_mode,
+            personality: config.personality,
+            approval_policy: config.permissions.approval_policy.value(),
+            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            network: None,
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            shell_environment_policy: config.permissions.shell_environment_policy.clone(),
+            tools_config,
+            features: config.features.clone(),
+            ghost_snapshot: config.ghost_snapshot.clone(),
+            final_output_json_schema: None,
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            tool_call_gate: Arc::new(ReadinessFlag::new()),
+            truncation_policy: model_info.truncation_policy.into(),
+            js_repl: Arc::new(JsReplHandle::with_node_path(None, config.codex_home.clone())),
+            dynamic_tools: Vec::new(),
+            turn_metadata_state,
+        }
+    }
+
     pub(crate) fn model_context_window(&self) -> Option<i64> {
         let effective_context_window_percent = self.model_info.effective_context_window_percent;
         self.model_info.context_window.map(|context_window| {
@@ -2598,6 +2677,153 @@ impl Session {
 
     pub fn enabled(&self, feature: Feature) -> bool {
         self.features.enabled(feature)
+    }
+
+    /// Create a minimal `Session` suitable for external harnesses (e.g.
+    /// Temporal workflows) that call [`try_run_sampling_request`] directly.
+    ///
+    /// This constructor wires up event delivery and storage but leaves
+    /// service-level fields (MCP, skills, auth, model client) at their
+    /// defaults/no-ops.  It is **not** suitable for the normal codex path
+    /// which requires the full `Session::new()`.
+    pub async fn new_minimal(
+        conversation_id: ThreadId,
+        config: Arc<Config>,
+        event_sink: Arc<dyn EventSink>,
+        storage: Arc<dyn StorageBackend>,
+    ) -> Arc<Self> {
+        use crate::agent::AgentControl;
+        use crate::exec_policy::ExecPolicyManager;
+        use crate::file_watcher::FileWatcher;
+        use crate::mcp_connection_manager::McpConnectionManager;
+        use crate::models_manager::manager::ModelsManager;
+        use crate::skills::SkillsManager;
+        use crate::tools::network_approval::NetworkApprovalService;
+        use crate::tools::sandboxing::ApprovalStore;
+        use crate::unified_exec::UnifiedExecProcessManager;
+        use codex_hooks::{Hooks, HooksConfig};
+
+        let auth_manager =
+            AuthManager::from_auth_for_testing(
+                crate::CodexAuth::from_api_key("harness"),
+            );
+        let models_manager = Arc::new(ModelsManager::new(
+            config.codex_home.clone(),
+            auth_manager.clone(),
+        ));
+        let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
+
+        let collaboration_mode = CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort: config.model_reasoning_effort,
+                developer_instructions: None,
+            },
+        };
+
+        let session_configuration = SessionConfiguration {
+            provider: config.model_provider.clone(),
+            collaboration_mode,
+            model_reasoning_summary: config.model_reasoning_summary,
+            developer_instructions: config.developer_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            personality: config.personality,
+            base_instructions: config
+                .base_instructions
+                .clone()
+                .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+            compact_prompt: config.compact_prompt.clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
+            windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+            cwd: config.cwd.clone(),
+            codex_home: config.codex_home.clone(),
+            thread_name: None,
+            original_config_do_not_use: Arc::clone(&config),
+            session_source: SessionSource::Exec,
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+        };
+
+        let otel_manager = OtelManager::new(
+            conversation_id,
+            session_configuration.collaboration_mode.model(),
+            model_info.slug.as_str(),
+            None,
+            None,
+            None,
+            "harness".to_string(),
+            false,
+            "harness".to_string(),
+            SessionSource::Exec,
+        );
+
+        let (tx_event, _rx_event) = async_channel::unbounded();
+        let (agent_status_tx, _) = watch::channel(AgentStatus::PendingInit);
+
+        let rollout = Arc::new(tokio::sync::Mutex::new(None));
+        let services = SessionServices {
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_startup_cancellation_token: tokio::sync::Mutex::new(CancellationToken::new()),
+            unified_exec_manager: UnifiedExecProcessManager::default(),
+            analytics_events_client: crate::analytics_client::AnalyticsEventsClient::new(
+                Arc::clone(&config),
+                Arc::clone(&auth_manager),
+            ),
+            hooks: Hooks::new(HooksConfig {
+                legacy_notify_argv: config.notify.clone(),
+            }),
+            rollout,
+            user_shell: Arc::new(crate::shell::default_user_shell()),
+            shell_snapshot_tx: watch::channel(None).0,
+            show_raw_agent_reasoning: false,
+            exec_policy: ExecPolicyManager::default(),
+            auth_manager,
+            otel_manager,
+            models_manager,
+            tool_approvals: tokio::sync::Mutex::new(ApprovalStore::default()),
+            skills_manager: Arc::new(SkillsManager::new(config.codex_home.clone())),
+            file_watcher: Arc::new(FileWatcher::noop()),
+            agent_control: AgentControl::default(),
+            network_proxy: None,
+            network_approval: Arc::new(NetworkApprovalService::default()),
+            state_db: None,
+            model_client: ModelClient::new(
+                None,
+                conversation_id,
+                session_configuration.provider.clone(),
+                session_configuration.session_source.clone(),
+                None,
+                false,
+                false,
+                false,
+                false,
+                None,
+            ),
+        };
+
+        let js_repl = Arc::new(JsReplHandle::with_node_path(None, config.codex_home.clone()));
+
+        let mut state = SessionState::new(session_configuration);
+        state.initial_context_seeded = true;
+
+        Arc::new(Session {
+            conversation_id,
+            tx_event,
+            agent_status: agent_status_tx,
+            state: tokio::sync::Mutex::new(state),
+            features: config.features.clone(),
+            pending_mcp_server_refresh_config: tokio::sync::Mutex::new(None),
+            active_turn: tokio::sync::Mutex::new(None),
+            services,
+            js_repl,
+            next_internal_sub_id: AtomicU64::new(0),
+            event_sink,
+            storage,
+        })
     }
 
     pub(crate) fn features(&self) -> Features {
@@ -5083,9 +5309,11 @@ async fn built_tools(
 }
 
 #[derive(Debug)]
-struct SamplingRequestResult {
-    needs_follow_up: bool,
-    last_agent_message: Option<String>,
+pub struct SamplingRequestResult {
+    /// Whether the model requested tool calls that need follow-up.
+    pub needs_follow_up: bool,
+    /// The last assistant message text, if any.
+    pub last_agent_message: Option<String>,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -5464,8 +5692,8 @@ async fn handle_assistant_item_done_in_plan_mode(
     false
 }
 
-async fn drain_in_flight(
-    in_flight: &mut FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>>,
+async fn drain_in_flight<F: futures::Future<Output = CodexResult<ResponseInputItem>>>(
+    in_flight: &mut FuturesOrdered<F>,
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
 ) -> CodexResult<()> {
@@ -5491,7 +5719,7 @@ async fn drain_in_flight(
         model = %turn_context.model_info.slug
     )
 )]
-async fn try_run_sampling_request<M: ModelStreamer, T: ToolCallHandler>(
+pub async fn try_run_sampling_request<M: ModelStreamer, T: ToolCallHandler>(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     model_streamer: &mut M,
@@ -5515,7 +5743,7 @@ async fn try_run_sampling_request<M: ModelStreamer, T: ToolCallHandler>(
     );
 
     sess.persist_rollout_items(&[rollout_item]).await;
-    let mut stream = model_streamer
+    let stream_fut = model_streamer
         .stream(
             prompt,
             &turn_context.model_info,
@@ -5524,11 +5752,14 @@ async fn try_run_sampling_request<M: ModelStreamer, T: ToolCallHandler>(
             turn_context.reasoning_summary,
             turn_metadata_header,
         )
-        .instrument(trace_span!("stream_request"))
-        .or_cancel(&cancellation_token)
-        .await??;
-    let mut in_flight: FuturesOrdered<BoxFuture<'static, CodexResult<ResponseInputItem>>> =
-        FuturesOrdered::new();
+        .instrument(trace_span!("stream_request"));
+    tokio::pin!(stream_fut);
+    let mut stream = tokio::select! {
+        biased;
+        _ = cancellation_token.cancelled() => return Err(CodexErr::TurnAborted),
+        result = &mut stream_fut => result?,
+    };
+    let mut in_flight: FuturesOrdered<T::Future> = FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -5545,14 +5776,14 @@ async fn try_run_sampling_request<M: ModelStreamer, T: ToolCallHandler>(
             from = field::Empty,
         );
 
-        let event = match stream
+        let next_fut = stream
             .next()
-            .instrument(trace_span!(parent: &handle_responses, "receiving"))
-            .or_cancel(&cancellation_token)
-            .await
-        {
-            Ok(event) => event,
-            Err(codex_async_utils::CancelErr::Cancelled) => break Err(CodexErr::TurnAborted),
+            .instrument(trace_span!(parent: &handle_responses, "receiving"));
+        tokio::pin!(next_fut);
+        let event = tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => break Err(CodexErr::TurnAborted),
+            event = &mut next_fut => event,
         };
 
         let event = match event {

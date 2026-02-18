@@ -1,4 +1,3 @@
-use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_protocol::config_types::ModeKind;
@@ -18,21 +17,27 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use futures::Future;
 use tracing::debug;
 use tracing::instrument;
 
-/// Handle a completed output item from the model stream, recording it and
-/// queuing any tool execution futures. This records items immediately so
-/// history and rollout stay in sync even if the turn is later cancelled.
-pub(crate) type InFlightFuture<'f> =
-    Pin<Box<dyn Future<Output = Result<ResponseInputItem>> + Send + 'f>>;
-
-#[derive(Default)]
-pub(crate) struct OutputItemResult {
+/// Result of processing a completed output item from the model stream.
+///
+/// Generic over `F`, the future type returned by the `ToolCallHandler` —
+/// `BoxFuture<'static, …>` for the in-process path, `LocalBoxFuture` for Temporal.
+pub(crate) struct OutputItemResult<F> {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
-    pub tool_future: Option<InFlightFuture<'static>>,
+    pub tool_future: Option<F>,
+}
+
+impl<F> Default for OutputItemResult<F> {
+    fn default() -> Self {
+        Self {
+            last_agent_message: None,
+            needs_follow_up: false,
+            tool_future: None,
+        }
+    }
 }
 
 pub(crate) struct HandleOutputCtx<'a, T: ToolCallHandler> {
@@ -47,7 +52,7 @@ pub(crate) async fn handle_output_item_done<T: ToolCallHandler>(
     ctx: &mut HandleOutputCtx<'_, T>,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
-) -> Result<OutputItemResult> {
+) -> Result<OutputItemResult<T::Future>> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.collaboration_mode.mode == ModeKind::Plan;
 
@@ -67,8 +72,7 @@ pub(crate) async fn handle_output_item_done<T: ToolCallHandler>(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_future: InFlightFuture<'static> =
-                ctx.tool_handler.handle_tool_call(call, cancellation_token);
+            let tool_future = ctx.tool_handler.handle_tool_call(call, cancellation_token);
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
