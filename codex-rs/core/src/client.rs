@@ -104,7 +104,7 @@ use crate::tools::spec::create_tools_json_for_responses_api;
 /// implementations to be injected (e.g., for Temporal workflow integration
 /// or testing purposes).
 #[async_trait::async_trait]
-pub trait ModelStreamer: Send {
+pub trait ModelStreamer {
     /// Stream a model response for the given prompt with per-turn settings.
     async fn stream(
         &mut self,

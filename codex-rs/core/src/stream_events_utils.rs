@@ -35,16 +35,16 @@ pub(crate) struct OutputItemResult {
     pub tool_future: Option<InFlightFuture<'static>>,
 }
 
-pub(crate) struct HandleOutputCtx<'a> {
+pub(crate) struct HandleOutputCtx<'a, T: ToolCallHandler> {
     pub sess: Arc<Session>,
     pub turn_context: Arc<TurnContext>,
-    pub tool_handler: &'a dyn ToolCallHandler,
+    pub tool_handler: &'a T,
     pub cancellation_token: CancellationToken,
 }
 
 #[instrument(level = "trace", skip_all)]
-pub(crate) async fn handle_output_item_done(
-    ctx: &mut HandleOutputCtx<'_>,
+pub(crate) async fn handle_output_item_done<T: ToolCallHandler>(
+    ctx: &mut HandleOutputCtx<'_, T>,
     item: ResponseItem,
     previously_active_item: Option<TurnItem>,
 ) -> Result<OutputItemResult> {

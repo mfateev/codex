@@ -4878,11 +4878,11 @@ fn codex_apps_connector_id(tool: &crate::mcp_connection_manager::ToolInfo) -> Op
         cwd = %turn_context.cwd.display()
     )
 )]
-async fn run_sampling_request(
+async fn run_sampling_request<M: ModelStreamer>(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
-    model_streamer: &mut dyn ModelStreamer,
+    model_streamer: &mut M,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
@@ -5491,11 +5491,11 @@ async fn drain_in_flight(
         model = %turn_context.model_info.slug
     )
 )]
-async fn try_run_sampling_request(
+async fn try_run_sampling_request<M: ModelStreamer, T: ToolCallHandler>(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
-    model_streamer: &mut dyn ModelStreamer,
-    tool_handler: &dyn ToolCallHandler,
+    model_streamer: &mut M,
+    tool_handler: &T,
     turn_metadata_header: Option<&str>,
     turn_diff_tracker: SharedTurnDiffTracker,
     prompt: &Prompt,

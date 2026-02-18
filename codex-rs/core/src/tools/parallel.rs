@@ -27,7 +27,7 @@ use codex_protocol::models::ResponseInputItem;
 /// This trait abstracts the tool dispatch interface, allowing different
 /// implementations to be injected (e.g., for Temporal workflow integration
 /// or testing purposes).
-pub trait ToolCallHandler: Send + Sync {
+pub trait ToolCallHandler {
     fn handle_tool_call(
         &self,
         call: ToolCall,
