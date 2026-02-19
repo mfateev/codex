@@ -4,18 +4,18 @@ use crate::app_event::AppEvent;
 use crate::session_log;
 
 #[derive(Clone, Debug)]
-pub(crate) struct AppEventSender {
+pub struct AppEventSender {
     pub app_event_tx: UnboundedSender<AppEvent>,
 }
 
 impl AppEventSender {
-    pub(crate) fn new(app_event_tx: UnboundedSender<AppEvent>) -> Self {
+    pub fn new(app_event_tx: UnboundedSender<AppEvent>) -> Self {
         Self { app_event_tx }
     }
 
     /// Send an event to the app event channel. If it fails, we swallow the
     /// error and log it.
-    pub(crate) fn send(&self, event: AppEvent) {
+    pub fn send(&self, event: AppEvent) {
         // Record inbound events for high-fidelity session replay.
         // Avoid double-logging Ops; those are logged at the point of submission.
         if !matches!(event, AppEvent::CodexOp(_)) {

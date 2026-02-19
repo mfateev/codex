@@ -44,7 +44,7 @@ pub(crate) struct ConnectorsSnapshot {
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
-pub(crate) enum AppEvent {
+pub enum AppEvent {
     CodexEvent(Event),
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,

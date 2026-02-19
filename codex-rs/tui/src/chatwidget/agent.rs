@@ -24,7 +24,7 @@ use crate::app_event_sender::AppEventSender;
 ///
 /// This is the public entry point for alternative backends (e.g. a Temporal
 /// workflow adapter).
-pub(crate) fn wire_session(
+pub fn wire_session(
     session: Arc<dyn AgentSession>,
     session_configured: SessionConfiguredEvent,
     app_event_tx: AppEventSender,
