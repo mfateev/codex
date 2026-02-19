@@ -651,7 +651,7 @@ impl TurnContext {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
-            js_repl: Arc::new(JsReplHandle::with_node_path(None, config.codex_home.clone())),
+            js_repl: Arc::new(JsReplHandle::with_node_path(None, vec![])),
             dynamic_tools: Vec::new(),
             turn_metadata_state,
         }
@@ -2752,9 +2752,10 @@ impl Session {
                 false,
                 None,
             ),
+            zsh_exec_bridge: ZshExecBridge::new(None, config.codex_home.clone()),
         };
 
-        let js_repl = Arc::new(JsReplHandle::with_node_path(None, config.codex_home.clone()));
+        let js_repl = Arc::new(JsReplHandle::with_node_path(None, vec![]));
 
         let mut state = SessionState::new(session_configuration);
         state.initial_context_seeded = true;
