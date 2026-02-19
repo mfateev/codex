@@ -1692,13 +1692,15 @@ fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
 }
 
 fn set_chatgpt_auth(chat: &mut ChatWidget) {
-    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     );
-    chat.models_manager = Arc::new(ModelsManager::new(
+    let models_manager = Arc::new(ModelsManager::new(
         chat.config.codex_home.clone(),
-        chat.auth_manager.clone(),
+        auth_manager.clone(),
     ));
+    chat.auth_manager = auth_manager;
+    chat.models_manager = models_manager;
 }
 
 #[tokio::test]

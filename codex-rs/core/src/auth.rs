@@ -935,6 +935,21 @@ impl UnauthorizedRecovery {
     }
 }
 
+/// Minimal interface for obtaining authentication data.
+///
+/// This trait abstracts the three methods the TUI actually calls on an
+/// `AuthManager`, making it possible to substitute a lightweight stub (e.g.
+/// in the Temporal TUI binary which does not need real auth).
+#[async_trait]
+pub trait AuthProvider: Send + Sync {
+    /// Current cached auth snapshot without attempting a refresh.
+    fn auth_cached(&self) -> Option<CodexAuth>;
+    /// Current auth, refreshing stale tokens if necessary.
+    async fn auth(&self) -> Option<CodexAuth>;
+    /// Reload auth from storage. Returns whether the value changed.
+    fn reload(&self) -> bool;
+}
+
 /// Central manager providing a single source of truth for auth.json derived
 /// authentication data. It loads once (or on preference change) and then
 /// hands out cloned `CodexAuth` values so the rest of the program has a
@@ -1289,6 +1304,21 @@ impl AuthManager {
         .map_err(RefreshTokenError::from)?;
 
         Ok(())
+    }
+}
+
+#[async_trait]
+impl AuthProvider for AuthManager {
+    fn auth_cached(&self) -> Option<CodexAuth> {
+        self.auth_cached()
+    }
+
+    async fn auth(&self) -> Option<CodexAuth> {
+        self.auth().await
+    }
+
+    fn reload(&self) -> bool {
+        self.reload()
     }
 }
 

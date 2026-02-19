@@ -37,7 +37,7 @@ const CODEX_FEEDBACK_INTERNAL_URL: &str = "http://go/codex-feedback-internal";
 /// This is used strictly for messaging/links after feedback upload completes. It
 /// must not change feedback upload behavior itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FeedbackAudience {
+pub enum FeedbackAudience {
     OpenAiEmployee,
     External,
 }

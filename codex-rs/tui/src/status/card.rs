@@ -42,7 +42,7 @@ use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
-use codex_core::AuthManager;
+use codex_core::AuthProvider;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -80,7 +80,7 @@ struct StatusHistoryCell {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output(
     config: &Config,
-    auth_manager: &AuthManager,
+    auth_manager: &dyn AuthProvider,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
@@ -114,7 +114,7 @@ pub(crate) fn new_status_output(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output_with_rate_limits(
     config: &Config,
-    auth_manager: &AuthManager,
+    auth_manager: &dyn AuthProvider,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
@@ -151,7 +151,7 @@ impl StatusHistoryCell {
     #[allow(clippy::too_many_arguments)]
     fn new(
         config: &Config,
-        auth_manager: &AuthManager,
+        auth_manager: &dyn AuthProvider,
         token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
         session_id: &Option<ThreadId>,

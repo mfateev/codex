@@ -43,6 +43,18 @@ pub enum RefreshStrategy {
     OnlineIfUncached,
 }
 
+/// Minimal interface for listing models and collaboration modes.
+///
+/// This trait abstracts the two methods the TUI actually calls on a
+/// `ModelsManager`, making it possible to substitute a lightweight stub
+/// (e.g. in the Temporal TUI binary that uses a fixed model).
+pub trait ModelsProvider: Send + Sync {
+    /// Attempt to list models without blocking, using the current cached state.
+    fn try_list_models(&self, config: &Config) -> Result<Vec<ModelPreset>, TryLockError>;
+    /// List collaboration mode presets.
+    fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask>;
+}
+
 /// Coordinates remote model discovery plus cached metadata on disk.
 #[derive(Debug)]
 pub struct ModelsManager {
@@ -390,6 +402,16 @@ impl ModelsManager {
         config: &Config,
     ) -> ModelInfo {
         model_info::with_config_overrides(model_info::model_info_from_slug(model), config)
+    }
+}
+
+impl ModelsProvider for ModelsManager {
+    fn try_list_models(&self, config: &Config) -> Result<Vec<ModelPreset>, TryLockError> {
+        self.try_list_models(config)
+    }
+
+    fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
+        self.list_collaboration_modes()
     }
 }
 

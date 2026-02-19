@@ -59,7 +59,7 @@ use codex_core::find_thread_name_by_id;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
-use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsProvider;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -218,7 +218,7 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 pub(crate) use self::agent::spawn_op_forwarder;
 #[allow(unused_imports)] // entry point for alternative backends (e.g. Temporal)
-pub(crate) use self::agent::wire_session;
+pub use self::agent::wire_session;
 mod session_header;
 use self::session_header::SessionHeader;
 mod skills;
@@ -234,7 +234,7 @@ use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
 use chrono::Local;
-use codex_core::AuthManager;
+use codex_core::AuthProvider;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
 use codex_core::protocol::AskForApproval;
@@ -407,21 +407,21 @@ pub(crate) fn get_limits_duration(windows_minutes: i64) -> String {
 }
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
-pub(crate) struct ChatWidgetInit {
-    pub(crate) config: Config,
-    pub(crate) frame_requester: FrameRequester,
-    pub(crate) app_event_tx: AppEventSender,
-    pub(crate) initial_user_message: Option<UserMessage>,
-    pub(crate) enhanced_keys_supported: bool,
-    pub(crate) auth_manager: Arc<AuthManager>,
-    pub(crate) models_manager: Arc<ModelsManager>,
-    pub(crate) feedback: codex_feedback::CodexFeedback,
-    pub(crate) is_first_run: bool,
-    pub(crate) feedback_audience: FeedbackAudience,
-    pub(crate) model: Option<String>,
+pub struct ChatWidgetInit {
+    pub config: Config,
+    pub frame_requester: FrameRequester,
+    pub app_event_tx: AppEventSender,
+    pub initial_user_message: Option<UserMessage>,
+    pub enhanced_keys_supported: bool,
+    pub auth_manager: Arc<dyn AuthProvider>,
+    pub models_manager: Arc<dyn ModelsProvider>,
+    pub feedback: codex_feedback::CodexFeedback,
+    pub is_first_run: bool,
+    pub feedback_audience: FeedbackAudience,
+    pub model: Option<String>,
     // Shared latch so we only warn once about invalid status-line item IDs.
-    pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
-    pub(crate) otel_manager: OtelManager,
+    pub status_line_invalid_items_warned: Arc<AtomicBool>,
+    pub otel_manager: OtelManager,
 }
 
 #[derive(Default)]
@@ -479,7 +479,7 @@ pub(crate) enum ExternalEditorState {
 /// Quit/interrupt behavior intentionally spans layers: the bottom pane owns local input routing
 /// (which view gets Ctrl+C), while `ChatWidget` owns process-level decisions such as interrupting
 /// active work, arming the double-press quit shortcut, and requesting shutdown-first exit.
-pub(crate) struct ChatWidget {
+pub struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane,
@@ -501,8 +501,8 @@ pub(crate) struct ChatWidget {
     current_collaboration_mode: CollaborationMode,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
-    auth_manager: Arc<AuthManager>,
-    models_manager: Arc<ModelsManager>,
+    auth_manager: Arc<dyn AuthProvider>,
+    models_manager: Arc<dyn ModelsProvider>,
     otel_manager: OtelManager,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
@@ -649,7 +649,7 @@ pub(crate) struct ActiveCellTranscriptKey {
     pub(crate) animation_tick: Option<u64>,
 }
 
-pub(crate) struct UserMessage {
+pub struct UserMessage {
     text: String,
     local_images: Vec<LocalImageAttachment>,
     /// Remote image attachments represented as URLs (for example data URLs)
@@ -2722,7 +2722,7 @@ impl ChatWidget {
         widget
     }
 
-    pub(crate) fn new_with_op_sender(
+    pub fn new_with_op_sender(
         common: ChatWidgetInit,
         codex_op_tx: UnboundedSender<Op>,
     ) -> Self {
@@ -3041,7 +3041,7 @@ impl ChatWidget {
         widget
     }
 
-    pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
+    pub fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
                 code: KeyCode::Char(c),
@@ -3961,7 +3961,7 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn handle_codex_event(&mut self, event: Event) {
+    pub fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
         self.dispatch_event_msg(Some(id), msg, false);
     }
@@ -6205,7 +6205,7 @@ impl ChatWidget {
 
     fn initial_collaboration_mask(
         config: &Config,
-        models_manager: &ModelsManager,
+        models_manager: &dyn ModelsProvider,
         model_override: Option<&str>,
     ) -> Option<CollaborationModeMask> {
         if !config.features.enabled(Feature::CollaborationModes) {

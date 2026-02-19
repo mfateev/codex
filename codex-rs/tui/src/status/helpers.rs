@@ -2,7 +2,7 @@ use crate::exec_command::relativize_to_home;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
-use codex_core::AuthManager;
+use codex_core::AuthProvider;
 use codex_core::auth::AuthMode as CoreAuthMode;
 use codex_core::config::Config;
 use codex_core::project_doc::discover_project_doc_paths;
@@ -85,7 +85,7 @@ pub(crate) fn compose_agents_summary(config: &Config) -> String {
 }
 
 pub(crate) fn compose_account_display(
-    auth_manager: &AuthManager,
+    auth_manager: &dyn AuthProvider,
     plan: Option<PlanType>,
 ) -> Option<StatusAccountDisplay> {
     let auth = auth_manager.auth_cached()?;

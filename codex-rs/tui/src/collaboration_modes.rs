@@ -1,8 +1,8 @@
-use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::manager::ModelsProvider;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 
-fn filtered_presets(models_manager: &ModelsManager) -> Vec<CollaborationModeMask> {
+fn filtered_presets(models_manager: &dyn ModelsProvider) -> Vec<CollaborationModeMask> {
     models_manager
         .list_collaboration_modes()
         .into_iter()
@@ -10,11 +10,11 @@ fn filtered_presets(models_manager: &ModelsManager) -> Vec<CollaborationModeMask
         .collect()
 }
 
-pub(crate) fn presets_for_tui(models_manager: &ModelsManager) -> Vec<CollaborationModeMask> {
+pub(crate) fn presets_for_tui(models_manager: &dyn ModelsProvider) -> Vec<CollaborationModeMask> {
     filtered_presets(models_manager)
 }
 
-pub(crate) fn default_mask(models_manager: &ModelsManager) -> Option<CollaborationModeMask> {
+pub(crate) fn default_mask(models_manager: &dyn ModelsProvider) -> Option<CollaborationModeMask> {
     let presets = filtered_presets(models_manager);
     presets
         .iter()
@@ -24,7 +24,7 @@ pub(crate) fn default_mask(models_manager: &ModelsManager) -> Option<Collaborati
 }
 
 pub(crate) fn mask_for_kind(
-    models_manager: &ModelsManager,
+    models_manager: &dyn ModelsProvider,
     kind: ModeKind,
 ) -> Option<CollaborationModeMask> {
     if !kind.is_tui_visible() {
@@ -37,7 +37,7 @@ pub(crate) fn mask_for_kind(
 
 /// Cycle to the next collaboration mode preset in list order.
 pub(crate) fn next_mask(
-    models_manager: &ModelsManager,
+    models_manager: &dyn ModelsProvider,
     current: Option<&CollaborationModeMask>,
 ) -> Option<CollaborationModeMask> {
     let presets = filtered_presets(models_manager);
@@ -52,10 +52,12 @@ pub(crate) fn next_mask(
     presets.get(next_index).cloned()
 }
 
-pub(crate) fn default_mode_mask(models_manager: &ModelsManager) -> Option<CollaborationModeMask> {
+pub(crate) fn default_mode_mask(
+    models_manager: &dyn ModelsProvider,
+) -> Option<CollaborationModeMask> {
     mask_for_kind(models_manager, ModeKind::Default)
 }
 
-pub(crate) fn plan_mask(models_manager: &ModelsManager) -> Option<CollaborationModeMask> {
+pub(crate) fn plan_mask(models_manager: &dyn ModelsProvider) -> Option<CollaborationModeMask> {
     mask_for_kind(models_manager, ModeKind::Plan)
 }
