@@ -165,7 +165,7 @@ pub(crate) mod tools {
 
     /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
     /// Responses API.
-    #[derive(Debug, Clone, Serialize, PartialEq)]
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     #[serde(tag = "type")]
     pub enum ToolSpec {
         #[serde(rename = "function")]
@@ -210,7 +210,7 @@ pub(crate) mod tools {
         pub(crate) definition: String,
     }
 
-    #[derive(Debug, Clone, Serialize, PartialEq)]
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     pub struct ResponsesApiTool {
         pub name: String,
         pub description: String,
