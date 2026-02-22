@@ -33,7 +33,7 @@ const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
 
 #[derive(Debug, Clone)]
-pub(crate) struct ToolsConfig {
+pub struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -46,10 +46,10 @@ pub(crate) struct ToolsConfig {
     pub experimental_supported_tools: Vec<String>,
 }
 
-pub(crate) struct ToolsConfigParams<'a> {
-    pub(crate) model_info: &'a ModelInfo,
-    pub(crate) features: &'a Features,
-    pub(crate) web_search_mode: Option<WebSearchMode>,
+pub struct ToolsConfigParams<'a> {
+    pub model_info: &'a ModelInfo,
+    pub features: &'a Features,
+    pub web_search_mode: Option<WebSearchMode>,
 }
 
 impl ToolsConfig {
@@ -1395,7 +1395,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 }
 
 /// Builds the tool registry builder while collecting tool specs for later serialization.
-pub(crate) fn build_specs(
+pub fn build_specs(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     app_tools: Option<HashMap<String, ToolInfo>>,

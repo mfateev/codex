@@ -1,6 +1,6 @@
 pub mod context;
 pub mod events;
-pub(crate) mod handlers;
+pub mod handlers;
 pub mod js_repl;
 pub(crate) mod network_approval;
 pub mod orchestrator;

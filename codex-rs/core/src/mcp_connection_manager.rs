@@ -163,12 +163,12 @@ where
 }
 
 #[derive(Clone)]
-pub(crate) struct ToolInfo {
-    pub(crate) server_name: String,
-    pub(crate) tool_name: String,
-    pub(crate) tool: Tool,
-    pub(crate) connector_id: Option<String>,
-    pub(crate) connector_name: Option<String>,
+pub struct ToolInfo {
+    pub server_name: String,
+    pub tool_name: String,
+    pub tool: Tool,
+    pub connector_id: Option<String>,
+    pub connector_name: Option<String>,
 }
 
 #[derive(Clone)]
