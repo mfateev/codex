@@ -117,7 +117,7 @@ pub(crate) struct ApprovalCtx<'a> {
 
 // Specifies what tool orchestrator should do with a given tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ExecApprovalRequirement {
+pub enum ExecApprovalRequirement {
     /// No approval required for this tool call.
     Skip {
         /// The first attempt should skip sandboxing (e.g., when explicitly

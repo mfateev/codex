@@ -38,7 +38,7 @@ use ratatui::widgets::Wrap;
 
 /// Request coming from the agent that needs user approval.
 #[derive(Clone, Debug)]
-pub(crate) enum ApprovalRequest {
+pub enum ApprovalRequest {
     Exec {
         id: String,
         command: Vec<String>,

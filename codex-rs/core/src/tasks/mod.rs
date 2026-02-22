@@ -50,7 +50,7 @@ const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previo
 
 /// Thin wrapper that exposes the parts of [`Session`] task runners need.
 #[derive(Clone)]
-pub(crate) struct SessionTaskContext {
+pub struct SessionTaskContext {
     session: Arc<Session>,
 }
 
@@ -81,7 +81,7 @@ impl SessionTaskContext {
 /// [`SessionTask::kind`], perform their work in [`SessionTask::run`], and may
 /// release resources in [`SessionTask::abort`].
 #[async_trait]
-pub(crate) trait SessionTask: Send + Sync + 'static {
+pub trait SessionTask: Send + Sync + 'static {
     /// Describes the type of work the task performs so the session can
     /// surface it in telemetry and UI.
     fn kind(&self) -> TaskKind;

@@ -46,7 +46,7 @@ use crate::render::renderable::Renderable;
 /// - Session ID only shows after a session has started
 #[derive(EnumIter, EnumString, Display, Debug, Clone, Eq, PartialEq)]
 #[strum(serialize_all = "kebab_case")]
-pub(crate) enum StatusLineItem {
+pub enum StatusLineItem {
     /// The current model name.
     ModelName,
 

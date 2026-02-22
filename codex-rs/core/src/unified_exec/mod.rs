@@ -128,7 +128,7 @@ impl ProcessStore {
     }
 }
 
-pub(crate) struct UnifiedExecProcessManager {
+pub struct UnifiedExecProcessManager {
     process_store: Mutex<ProcessStore>,
     max_write_stdin_yield_time_ms: u64,
 }

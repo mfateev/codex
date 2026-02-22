@@ -31,14 +31,14 @@ use codex_protocol::openai_models::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub(crate) enum WindowsSandboxEnableMode {
+pub enum WindowsSandboxEnableMode {
     Elevated,
     Legacy,
 }
 
 #[derive(Debug, Clone)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub(crate) struct ConnectorsSnapshot {
+pub struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
 }
 
@@ -356,7 +356,7 @@ pub enum AppEvent {
 /// after core acknowledges completion. `Immediate` is an escape hatch for cases where shutdown has
 /// already completed (or is being bypassed) and the UI loop should terminate right away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExitMode {
+pub enum ExitMode {
     /// Shutdown core and exit after completion.
     ShutdownFirst,
     /// Exit the UI loop immediately without waiting for shutdown.
@@ -367,7 +367,7 @@ pub(crate) enum ExitMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FeedbackCategory {
+pub enum FeedbackCategory {
     BadResult,
     GoodResult,
     Bug,
