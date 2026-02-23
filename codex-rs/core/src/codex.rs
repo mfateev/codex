@@ -2595,7 +2595,7 @@ impl Session {
         true
     }
 
-    pub(crate) async fn replace_history(&self, items: Vec<ResponseItem>) {
+    pub async fn replace_history(&self, items: Vec<ResponseItem>) {
         let mut state = self.state.lock().await;
         state.replace_history(items);
     }
