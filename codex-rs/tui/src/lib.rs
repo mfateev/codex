@@ -93,7 +93,7 @@ mod oss_selection;
 mod pager_overlay;
 pub mod public_widgets;
 pub mod render;
-mod resume_picker;
+pub mod resume_picker;
 mod selection_list;
 mod session_log;
 mod shimmer;

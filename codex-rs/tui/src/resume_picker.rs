@@ -77,17 +77,17 @@ impl SessionPickerAction {
 }
 
 #[derive(Clone)]
-struct PageLoadRequest {
-    cursor: Option<Cursor>,
-    request_token: usize,
-    search_token: Option<usize>,
-    default_provider: String,
-    sort_key: ThreadSortKey,
+pub struct PageLoadRequest {
+    pub cursor: Option<Cursor>,
+    pub request_token: usize,
+    pub search_token: Option<usize>,
+    pub default_provider: String,
+    pub sort_key: ThreadSortKey,
 }
 
-type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
+pub type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
 
-enum BackgroundEvent {
+pub enum BackgroundEvent {
     PageLoaded {
         request_token: usize,
         search_token: Option<usize>,
@@ -133,11 +133,8 @@ async fn run_session_picker(
     show_all: bool,
     action: SessionPickerAction,
 ) -> Result<SessionSelection> {
-    let alt = AltScreenGuard::enter(tui);
-    let (bg_tx, bg_rx) = mpsc::unbounded_channel();
-
     let default_provider = config.model_provider_id.to_string();
-    let codex_home = config.codex_home.as_path();
+    let codex_home = config.codex_home.clone();
     let filter_cwd = if show_all {
         None
     } else {
@@ -145,35 +142,67 @@ async fn run_session_picker(
     };
 
     let config = config.clone();
-    let loader_tx = bg_tx.clone();
-    let page_loader: PageLoader = Arc::new(move |request: PageLoadRequest| {
-        let tx = loader_tx.clone();
-        let config = config.clone();
-        tokio::spawn(async move {
-            let provider_filter = vec![request.default_provider.clone()];
-            let page = RolloutRecorder::list_threads(
-                &config,
-                PAGE_SIZE,
-                request.cursor.as_ref(),
-                request.sort_key,
-                INTERACTIVE_SESSION_SOURCES,
-                Some(provider_filter.as_slice()),
-                request.default_provider.as_str(),
-            )
-            .await;
-            let _ = tx.send(BackgroundEvent::PageLoaded {
-                request_token: request.request_token,
-                search_token: request.search_token,
-                page,
-            });
-        });
-    });
+    run_picker_with_loader_factory(
+        tui,
+        |bg_tx| {
+            let loader_tx = bg_tx;
+            Arc::new(move |request: PageLoadRequest| {
+                let tx = loader_tx.clone();
+                let config = config.clone();
+                tokio::spawn(async move {
+                    let provider_filter = vec![request.default_provider.clone()];
+                    let page = RolloutRecorder::list_threads(
+                        &config,
+                        PAGE_SIZE,
+                        request.cursor.as_ref(),
+                        request.sort_key,
+                        INTERACTIVE_SESSION_SOURCES,
+                        Some(provider_filter.as_slice()),
+                        request.default_provider.as_str(),
+                    )
+                    .await;
+                    let _ = tx.send(BackgroundEvent::PageLoaded {
+                        request_token: request.request_token,
+                        search_token: request.search_token,
+                        page,
+                    });
+                });
+            })
+        },
+        codex_home,
+        default_provider,
+        show_all,
+        filter_cwd,
+        action,
+    )
+    .await
+}
+
+/// Run the session picker with a custom page loader factory.
+///
+/// The `make_loader` callback receives the background event sender and must
+/// return a [`PageLoader`] that sends [`BackgroundEvent::PageLoaded`] results
+/// back through it. This lets external callers (e.g. the Temporal harness TUI)
+/// supply their own data source while reusing the full interactive picker UI.
+pub async fn run_picker_with_loader_factory(
+    tui: &mut Tui,
+    make_loader: impl FnOnce(mpsc::UnboundedSender<BackgroundEvent>) -> PageLoader,
+    codex_home: PathBuf,
+    default_provider: String,
+    show_all: bool,
+    filter_cwd: Option<PathBuf>,
+    action: SessionPickerAction,
+) -> Result<SessionSelection> {
+    let alt = AltScreenGuard::enter(tui);
+    let (bg_tx, bg_rx) = mpsc::unbounded_channel();
+
+    let page_loader = make_loader(bg_tx);
 
     let mut state = PickerState::new(
-        codex_home.to_path_buf(),
+        codex_home,
         alt.tui.frame_requester(),
         page_loader,
-        default_provider.clone(),
+        default_provider,
         show_all,
         filter_cwd,
         action,
