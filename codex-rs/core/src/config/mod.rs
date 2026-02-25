@@ -526,6 +526,46 @@ impl ConfigBuilder {
             config_layer_stack,
         )
     }
+
+    /// Load and merge config layers, returning the effective TOML as a string.
+    ///
+    /// Performs file I/O (reads config layers from disk). Use this when the
+    /// merged config must be serialized and sent across a process boundary
+    /// (e.g., a Temporal activity returning config to a workflow).
+    pub async fn build_toml_string(self) -> std::io::Result<String> {
+        let Self {
+            codex_home,
+            cli_overrides,
+            harness_overrides,
+            loader_overrides,
+            cloud_requirements,
+            fallback_cwd,
+        } = self;
+        let codex_home = codex_home.map_or_else(find_codex_home, std::io::Result::Ok)?;
+        let cli_overrides = cli_overrides.unwrap_or_default();
+        let harness_overrides = harness_overrides.unwrap_or_default();
+        let loader_overrides = loader_overrides.unwrap_or_default();
+        let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
+        let cwd = match cwd_override {
+            Some(path) => AbsolutePathBuf::try_from(path)?,
+            None => AbsolutePathBuf::current_dir()?,
+        };
+        let config_layer_stack = load_config_layers_state(
+            &codex_home,
+            Some(cwd),
+            &cli_overrides,
+            loader_overrides,
+            cloud_requirements,
+        )
+        .await?;
+        let merged_toml = config_layer_stack.effective_config();
+        toml::to_string(&merged_toml).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("failed to serialize merged config to TOML: {e}"),
+            )
+        })
+    }
 }
 
 impl Config {
@@ -1502,6 +1542,27 @@ impl Config {
             codex_home,
             ConfigLayerStack::default(),
             None,
+        )
+    }
+
+    /// Construct a `Config` from a pre-parsed [`ConfigToml`] without file I/O.
+    ///
+    /// Use this when the config was loaded externally (e.g., via a Temporal
+    /// activity that called [`ConfigBuilder::build_toml_string()`]) and must
+    /// be reconstructed in a deterministic context where disk reads are
+    /// forbidden.
+    pub fn from_toml(
+        cfg: ConfigToml,
+        overrides: ConfigOverrides,
+        codex_home: PathBuf,
+        user_instructions: Option<String>,
+    ) -> std::io::Result<Self> {
+        Self::load_config_with_layer_stack_inner(
+            cfg,
+            overrides,
+            codex_home,
+            ConfigLayerStack::default(),
+            user_instructions,
         )
     }
 
