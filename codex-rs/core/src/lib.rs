@@ -20,6 +20,7 @@ mod compact_remote;
 pub use codex_thread::CodexThread;
 pub use codex_thread::ThreadConfigSnapshot;
 mod agent;
+pub use agent::role::apply_role_to_config;
 pub mod agent_session;
 pub use agent_session::AgentSession;
 mod codex_delegate;
@@ -142,7 +143,8 @@ mod state;
 mod tasks;
 mod user_shell_command;
 pub mod util;
-pub(crate) use codex_protocol::protocol;
+// Upstream has pub(crate) here; we override to `pub` at line 178 below.
+// pub(crate) use codex_protocol::protocol;
 pub(crate) use codex_shell_command::bash;
 pub(crate) use codex_shell_command::is_dangerous_command;
 pub(crate) use codex_shell_command::is_safe_command;

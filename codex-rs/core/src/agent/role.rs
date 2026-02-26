@@ -17,7 +17,7 @@ pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
 /// Applies a role config layer to a mutable config and preserves unspecified keys.
-pub(crate) async fn apply_role_to_config(
+pub async fn apply_role_to_config(
     config: &mut Config,
     role_name: Option<&str>,
 ) -> Result<(), String> {

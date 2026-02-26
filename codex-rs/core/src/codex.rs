@@ -655,7 +655,9 @@ impl TurnContext {
             SessionSource::Exec,
         );
         let reasoning_effort = config.model_reasoning_effort;
-        let reasoning_summary = config.model_reasoning_summary;
+        let reasoning_summary = config
+            .model_reasoning_summary
+            .unwrap_or(model_info.default_reasoning_summary);
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
             settings: Settings {
@@ -668,6 +670,7 @@ impl TurnContext {
             model_info: &model_info,
             features: &config.features,
             web_search_mode: None,
+            session_source: SessionSource::Exec,
         });
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             sub_id.clone(),
@@ -692,8 +695,8 @@ impl TurnContext {
             user_instructions: config.user_instructions.clone(),
             collaboration_mode,
             personality: config.personality,
-            approval_policy: config.permissions.approval_policy.value(),
-            sandbox_policy: config.permissions.sandbox_policy.get().clone(),
+            approval_policy: config.permissions.approval_policy.clone(),
+            sandbox_policy: config.permissions.sandbox_policy.clone(),
             network: None,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             shell_environment_policy: config.permissions.shell_environment_policy.clone(),
@@ -707,6 +710,7 @@ impl TurnContext {
             js_repl: Arc::new(JsReplHandle::with_node_path(None, vec![])),
             dynamic_tools: Vec::new(),
             turn_metadata_state,
+            turn_skills: TurnSkillsContext::new(Arc::new(SkillLoadOutcome::default())),
         }
     }
 
@@ -3088,6 +3092,7 @@ impl Session {
         use crate::exec_policy::ExecPolicyManager;
         use crate::file_watcher::FileWatcher;
         use crate::mcp_connection_manager::McpConnectionManager;
+        use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
         use crate::models_manager::manager::ModelsManager;
         use crate::skills::SkillsManager;
         use crate::tools::network_approval::NetworkApprovalService;
@@ -3102,6 +3107,8 @@ impl Session {
         let models_manager = Arc::new(ModelsManager::new(
             config.codex_home.clone(),
             auth_manager.clone(),
+            None,
+            CollaborationModesConfig::default(),
         ));
         let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
         let model_info =
@@ -3135,6 +3142,7 @@ impl Session {
             codex_home: config.codex_home.clone(),
             thread_name: None,
             original_config_do_not_use: Arc::clone(&config),
+            metrics_service_name: None,
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
@@ -3158,9 +3166,15 @@ impl Session {
 
         let rollout = Arc::new(tokio::sync::Mutex::new(None));
         let services = SessionServices {
-            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::default())),
+            mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
+                &config.permissions.approval_policy,
+            ))),
             mcp_startup_cancellation_token: tokio::sync::Mutex::new(CancellationToken::new()),
-            unified_exec_manager: UnifiedExecProcessManager::default(),
+            unified_exec_manager: UnifiedExecProcessManager::new(
+                config.background_terminal_max_timeout,
+            ),
+            shell_zsh_path: config.zsh_path.clone(),
+            main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
             analytics_events_client: crate::analytics_client::AnalyticsEventsClient::new(
                 Arc::clone(&config),
                 Arc::clone(&auth_manager),
@@ -3177,6 +3191,7 @@ impl Session {
             otel_manager,
             models_manager,
             tool_approvals: tokio::sync::Mutex::new(ApprovalStore::default()),
+            execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager: Arc::new(SkillsManager::new(config.codex_home.clone())),
             file_watcher: Arc::new(FileWatcher::noop()),
             agent_control: AgentControl::default(),
@@ -3189,19 +3204,16 @@ impl Session {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 None,
-                false,
-                false,
+                None,
                 false,
                 false,
                 None,
             ),
-            zsh_exec_bridge: ZshExecBridge::new(None, config.codex_home.clone()),
         };
 
         let js_repl = Arc::new(JsReplHandle::with_node_path(None, vec![]));
 
-        let mut state = SessionState::new(session_configuration);
-        state.initial_context_seeded = true;
+        let state = SessionState::new(session_configuration);
 
         Arc::new(Session {
             conversation_id,
@@ -3210,6 +3222,7 @@ impl Session {
             state: tokio::sync::Mutex::new(state),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: tokio::sync::Mutex::new(None),
+            conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: tokio::sync::Mutex::new(None),
             services,
             js_repl,

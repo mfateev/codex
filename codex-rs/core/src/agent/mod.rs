@@ -1,6 +1,6 @@
 pub(crate) mod control;
 mod guards;
-pub(crate) mod role;
+pub mod role;
 pub(crate) mod status;
 
 pub(crate) use codex_protocol::protocol::AgentStatus;
