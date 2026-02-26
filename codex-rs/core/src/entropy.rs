@@ -6,7 +6,6 @@
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
-use std::time::Instant;
 use std::time::SystemTime;
 
 /// Source of randomness (UUIDs, random numbers).
@@ -23,8 +22,6 @@ pub trait RandomSource: Send + Sync + Debug {
 
 /// Source of time.
 pub trait Clock: Send + Sync + Debug {
-    /// Returns a monotonic instant (for measuring durations).
-    fn now(&self) -> Instant;
     /// Returns wall-clock time.
     fn wall_time(&self) -> SystemTime;
     /// Returns milliseconds since Unix epoch.
@@ -67,10 +64,6 @@ impl RandomSource for SystemRandomSource {
 pub struct SystemClock;
 
 impl Clock for SystemClock {
-    fn now(&self) -> Instant {
-        Instant::now()
-    }
-
     fn wall_time(&self) -> SystemTime {
         SystemTime::now()
     }
@@ -121,15 +114,6 @@ pub fn entropy_uuid() -> String {
         .unwrap_or_else(|_| uuid::Uuid::new_v4().to_string())
 }
 
-/// Helper to access the task-local monotonic clock.
-///
-/// Falls back to `Instant::now()` when called outside a scoped context.
-pub fn entropy_now() -> Instant {
-    ENTROPY
-        .try_with(|e| e.clock.now())
-        .unwrap_or_else(|_| Instant::now())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,14 +148,6 @@ mod tests {
     }
 
     #[test]
-    fn system_clock_now_is_monotonic() {
-        let clock = SystemClock;
-        let t1 = clock.now();
-        let t2 = clock.now();
-        assert!(t2 >= t1, "Clock should be monotonic");
-    }
-
-    #[test]
     fn system_clock_unix_millis_is_reasonable() {
         let clock = SystemClock;
         let millis = clock.unix_millis();
@@ -186,7 +162,6 @@ mod tests {
         // Should not panic and should produce valid output
         let uuid = providers.random.uuid();
         assert!(!uuid.is_empty());
-        let _ = providers.clock.now();
     }
 
     // Test helper for deterministic testing
