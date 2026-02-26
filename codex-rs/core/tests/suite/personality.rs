@@ -2,10 +2,6 @@ use codex_core::config::types::Personality;
 use codex_core::features::Feature;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::ModelInfo;
@@ -17,6 +13,10 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::load_default_config_for_test;
 use core_test_support::responses::mount_models_once;
@@ -599,6 +599,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
             }),
         }),
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,
@@ -706,6 +707,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
             }),
         }),
         supports_reasoning_summaries: false,
+        default_reasoning_summary: ReasoningSummary::Auto,
         support_verbosity: false,
         default_verbosity: None,
         apply_patch_tool_type: None,

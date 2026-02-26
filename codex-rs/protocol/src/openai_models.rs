@@ -4,7 +4,6 @@
 //! are used to preserve compatibility when older payloads omit newly introduced attributes.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -16,6 +15,7 @@ use tracing::warn;
 use ts_rs::TS;
 
 use crate::config_types::Personality;
+use crate::config_types::ReasoningSummary;
 use crate::config_types::Verbosity;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
@@ -230,6 +230,8 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_messages: Option<ModelMessages>,
     pub supports_reasoning_summaries: bool,
+    #[serde(default)]
+    pub default_reasoning_summary: ReasoningSummary,
     pub support_verbosity: bool,
     pub default_verbosity: Option<Verbosity>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
@@ -425,32 +427,18 @@ impl ModelPreset {
             .collect()
     }
 
-    /// Merge remote presets with existing presets, preferring remote when slugs match.
+    /// Recompute the single default preset using picker visibility.
     ///
-    /// Remote presets take precedence. Existing presets not in remote are appended with `is_default` set to false.
-    pub fn merge(
-        remote_presets: Vec<ModelPreset>,
-        existing_presets: Vec<ModelPreset>,
-    ) -> Vec<ModelPreset> {
-        if remote_presets.is_empty() {
-            return existing_presets;
-        }
-
-        let remote_slugs: HashSet<&str> = remote_presets
-            .iter()
-            .map(|preset| preset.model.as_str())
-            .collect();
-
-        let mut merged_presets = remote_presets.clone();
-        for mut preset in existing_presets {
-            if remote_slugs.contains(preset.model.as_str()) {
-                continue;
-            }
+    /// The first picker-visible model wins; if none are picker-visible, the first model wins.
+    pub fn mark_default_by_picker_visibility(models: &mut [ModelPreset]) {
+        for preset in models.iter_mut() {
             preset.is_default = false;
-            merged_presets.push(preset);
         }
-
-        merged_presets
+        if let Some(default) = models.iter_mut().find(|preset| preset.show_in_picker) {
+            default.is_default = true;
+        } else if let Some(default) = models.first_mut() {
+            default.is_default = true;
+        }
     }
 }
 
@@ -511,6 +499,7 @@ mod tests {
             base_instructions: "base".to_string(),
             model_messages: spec,
             supports_reasoning_summaries: false,
+            default_reasoning_summary: ReasoningSummary::Auto,
             support_verbosity: false,
             default_verbosity: None,
             apply_patch_tool_type: None,
