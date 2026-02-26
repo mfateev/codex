@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::entropy::entropy_now;
+use std::time::Instant;
 use futures::future::BoxFuture;
 use tokio::sync::RwLock;
 use tokio_util::either::Either;
@@ -80,7 +80,7 @@ impl ToolCallRuntime {
         let turn = Arc::clone(&self.turn_context);
         let tracker = Arc::clone(&self.tracker);
         let lock = Arc::clone(&self.parallel_execution);
-        let started = entropy_now();
+        let started = Instant::now();
 
         let dispatch_span = trace_span!(
             "dispatch_tool_call",
