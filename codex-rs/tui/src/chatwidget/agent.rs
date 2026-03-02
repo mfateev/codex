@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use codex_core::AgentSession;
 use codex_core::CodexThread;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
@@ -7,6 +8,7 @@ use codex_core::config::Config;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SessionConfiguredEvent;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -143,6 +145,64 @@ pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> Unbound
                 tracing::error!("failed to submit op: {e}");
             }
         }
+    });
+
+    codex_op_tx
+}
+
+/// Wire an external [`AgentSession`] into the TUI event protocol.
+///
+/// This is the trait-object equivalent of [`spawn_agent_from_existing`]: it
+/// spawns op-forwarding and event-forwarding tasks that bridge the
+/// `UnboundedSender<Op>` / `AppEventSender` channels used by `ChatWidget`
+/// to the `submit()` / `next_event()` contract of an `AgentSession`.
+///
+/// The `SessionConfiguredEvent` is forwarded immediately so the TUI can
+/// render the session header.
+pub(crate) fn wire_session(
+    session: Arc<dyn AgentSession>,
+    session_configured: SessionConfiguredEvent,
+    app_event_tx: AppEventSender,
+) -> UnboundedSender<Op> {
+    let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
+
+    let app_event_tx_clone = app_event_tx;
+    tokio::spawn(async move {
+        // Forward the SessionConfigured event so the TUI can render the header.
+        let ev = Event {
+            id: String::new(),
+            msg: EventMsg::SessionConfigured(session_configured),
+        };
+        app_event_tx_clone.send(AppEvent::CodexEvent(ev));
+
+        // Op-forwarding task: UI → session.
+        let session_for_ops = session.clone();
+        let op_task = tokio::spawn(async move {
+            while let Some(op) = codex_op_rx.recv().await {
+                if let Err(e) = session_for_ops.submit(op).await {
+                    tracing::error!("failed to submit op to session: {e}");
+                }
+            }
+        });
+
+        // Event-forwarding loop: session → UI.
+        loop {
+            match session.next_event().await {
+                Ok(event) => {
+                    let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
+                    app_event_tx_clone.send(AppEvent::CodexEvent(event));
+                    if is_shutdown_complete {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("session event error: {e}");
+                    break;
+                }
+            }
+        }
+
+        op_task.abort();
     });
 
     codex_op_tx

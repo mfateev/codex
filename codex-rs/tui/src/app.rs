@@ -38,6 +38,7 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_core::AgentSession;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -50,6 +51,7 @@ use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_core::models_manager::manager::ModelsManager;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
@@ -625,7 +627,8 @@ async fn handle_model_migration_prompt_if_needed(
 }
 
 pub(crate) struct App {
-    pub(crate) server: Arc<ThreadManager>,
+    server: Option<Arc<ThreadManager>>,
+    models_manager: Arc<ModelsManager>,
     pub(crate) otel_manager: OtelManager,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
@@ -732,7 +735,7 @@ impl App {
             initial_user_message: None,
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
-            models_manager: self.server.get_models_manager(),
+            models_manager: self.models_manager.clone(),
             feedback: self.feedback.clone(),
             is_first_run: false,
             feedback_audience: self.feedback_audience,
@@ -864,7 +867,9 @@ impl App {
             self.backtrack.pending_rollback = None;
             self.suppress_shutdown_complete = true;
             self.chat_widget.submit_op(Op::Shutdown);
-            self.server.remove_thread(&thread_id).await;
+            if let Some(s) = &self.server {
+                s.remove_thread(&thread_id).await;
+            }
             self.abort_thread_event_listener(thread_id);
         }
     }
@@ -1047,7 +1052,10 @@ impl App {
             self.chat_widget.submit_op(op)
         } else {
             crate::session_log::log_outbound_op(&op);
-            match self.server.get_thread(thread_id).await {
+            let Some(s) = &self.server else {
+                return;
+            };
+            match s.get_thread(thread_id).await {
                 Ok(thread) => match thread.submit(op).await {
                     Ok(_) => true,
                     Err(err) => {
@@ -1183,20 +1191,22 @@ impl App {
     }
 
     async fn open_agent_picker(&mut self) {
-        let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
-        for thread_id in thread_ids {
-            match self.server.get_thread(thread_id).await {
-                Ok(thread) => {
-                    let session_source = thread.config_snapshot().await.session_source;
-                    self.upsert_agent_picker_thread(
-                        thread_id,
-                        session_source.get_nickname(),
-                        session_source.get_agent_role(),
-                        false,
-                    );
-                }
-                Err(_) => {
-                    self.mark_agent_picker_thread_closed(thread_id);
+        if let Some(s) = self.server.clone() {
+            let thread_ids: Vec<ThreadId> = self.thread_event_channels.keys().cloned().collect();
+            for thread_id in thread_ids {
+                match s.get_thread(thread_id).await {
+                    Ok(thread) => {
+                        let session_source = thread.config_snapshot().await.session_source;
+                        self.upsert_agent_picker_thread(
+                            thread_id,
+                            session_source.get_nickname(),
+                            session_source.get_agent_role(),
+                            false,
+                        );
+                    }
+                    Err(_) => {
+                        self.mark_agent_picker_thread_closed(thread_id);
+                    }
                 }
             }
         }
@@ -1285,19 +1295,22 @@ impl App {
             return Ok(());
         }
 
-        let live_thread = match self.server.get_thread(thread_id).await {
-            Ok(thread) => Some(thread),
-            Err(err) => {
-                if self.thread_event_channels.contains_key(&thread_id) {
-                    self.mark_agent_picker_thread_closed(thread_id);
-                    None
-                } else {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to attach to agent thread {thread_id}: {err}"
-                    ));
-                    return Ok(());
+        let live_thread = match &self.server {
+            Some(s) => match s.get_thread(thread_id).await {
+                Ok(thread) => Some(thread),
+                Err(err) => {
+                    if self.thread_event_channels.contains_key(&thread_id) {
+                        self.mark_agent_picker_thread_closed(thread_id);
+                        None
+                    } else {
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to attach to agent thread {thread_id}: {err}"
+                        ));
+                        return Ok(());
+                    }
                 }
-            }
+            },
+            None => None,
         };
         let is_replay_only = live_thread.is_none();
 
@@ -1372,8 +1385,10 @@ impl App {
             self.chat_widget.thread_name(),
         );
         self.shutdown_current_thread().await;
-        if let Err(err) = self.server.remove_and_close_all_threads().await {
-            tracing::warn!(error = %err, "failed to close all threads");
+        if let Some(s) = &self.server {
+            if let Err(err) = s.remove_and_close_all_threads().await {
+                tracing::warn!(error = %err, "failed to close all threads");
+            }
         }
         let init = crate::chatwidget::ChatWidgetInit {
             config: self.config.clone(),
@@ -1383,7 +1398,7 @@ impl App {
             initial_user_message: None,
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
-            models_manager: self.server.get_models_manager(),
+            models_manager: self.models_manager.clone(),
             feedback: self.feedback.clone(),
             is_first_run: false,
             feedback_audience: self.feedback_audience,
@@ -1392,7 +1407,11 @@ impl App {
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             otel_manager: self.otel_manager.clone(),
         };
-        self.chat_widget = ChatWidget::new(init, self.server.clone());
+        let Some(server) = self.server.clone() else {
+            tracing::warn!("NewSession ignored: no ThreadManager available");
+            return;
+        };
+        self.chat_widget = ChatWidget::new(init, server);
         self.reset_thread_event_state();
         if let Some(summary) = summary {
             let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
@@ -1695,7 +1714,8 @@ impl App {
         let upgrade_version = crate::updates::get_upgrade_version(&config);
 
         let mut app = Self {
-            server: thread_manager.clone(),
+            server: Some(thread_manager.clone()),
+            models_manager: thread_manager.get_models_manager(),
             otel_manager: otel_manager.clone(),
             app_event_tx,
             chat_widget,
@@ -1850,6 +1870,186 @@ impl App {
         })
     }
 
+    /// Run the TUI event loop backed by an externally-provided [`AgentSession`]
+    /// instead of the built-in [`ThreadManager`].
+    ///
+    /// The event loop is identical to [`App::run`] — only the bootstrap differs:
+    /// no `ThreadManager`, no auth/model migration prompts, no resume/fork.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_with_session(
+        tui: &mut tui::Tui,
+        session: Arc<dyn AgentSession>,
+        session_configured: SessionConfiguredEvent,
+        mut config: Config,
+        auth_manager: Arc<AuthManager>,
+        models_manager: Arc<ModelsManager>,
+        model: String,
+        initial_prompt: Option<String>,
+        feedback: codex_feedback::CodexFeedback,
+    ) -> Result<AppExitInfo> {
+        use tokio_stream::StreamExt;
+        let (app_event_tx, mut app_event_rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(app_event_tx);
+        config.model = Some(model.clone());
+
+        // Wire the external session into the TUI channel protocol.
+        let op_tx = crate::chatwidget::wire_session(
+            session,
+            session_configured,
+            app_event_tx.clone(),
+        );
+
+        let otel_manager = OtelManager::new(
+            ThreadId::new(),
+            &model,
+            &model,
+            None,
+            None,
+            None,
+            "codex-temporal-tui".to_string(),
+            false,
+            "temporal-tui".to_string(),
+            codex_protocol::protocol::SessionSource::Cli,
+        );
+
+        let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let enhanced_keys_supported = tui.enhanced_keys_supported();
+        let feedback_audience = FeedbackAudience::External;
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: config.clone(),
+            frame_requester: tui.frame_requester(),
+            app_event_tx: app_event_tx.clone(),
+            initial_user_message: crate::chatwidget::create_initial_user_message(
+                initial_prompt,
+                Vec::new(),
+                Vec::new(),
+            ),
+            enhanced_keys_supported,
+            auth_manager: auth_manager.clone(),
+            models_manager: models_manager.clone(),
+            feedback: feedback.clone(),
+            is_first_run: false,
+            feedback_audience,
+            model: Some(model),
+            startup_tooltip_override: None,
+            status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+            otel_manager: otel_manager.clone(),
+        };
+        let chat_widget = ChatWidget::new_with_op_sender(init, op_tx);
+
+        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+
+        let mut app = Self {
+            server: None,
+            models_manager,
+            otel_manager,
+            app_event_tx,
+            chat_widget,
+            auth_manager,
+            config,
+            active_profile: None,
+            cli_kv_overrides: Vec::new(),
+            harness_overrides: ConfigOverrides::default(),
+            runtime_approval_policy_override: None,
+            runtime_sandbox_policy_override: None,
+            file_search,
+            enhanced_keys_supported,
+            transcript_cells: Vec::new(),
+            overlay: None,
+            deferred_history_lines: Vec::new(),
+            has_emitted_history_lines: false,
+            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            status_line_invalid_items_warned,
+            backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
+            feedback: feedback.clone(),
+            feedback_audience,
+            pending_update_action: None,
+            suppress_shutdown_complete: false,
+            pending_shutdown_exit_thread_id: None,
+            windows_sandbox: WindowsSandboxState::default(),
+            thread_event_channels: HashMap::new(),
+            thread_event_listener_tasks: HashMap::new(),
+            agent_picker_threads: HashMap::new(),
+            active_thread_id: None,
+            active_thread_rx: None,
+            primary_thread_id: None,
+            primary_session_configured: None,
+            pending_primary_events: VecDeque::new(),
+        };
+
+        let tui_events = tui.event_stream();
+        tokio::pin!(tui_events);
+
+        tui.frame_requester().schedule_frame();
+
+        // No ThreadManager → dummy broadcast that never produces.
+        let (_thread_created_tx, mut thread_created_rx) = broadcast::channel::<ThreadId>(1);
+        let mut listen_for_threads = false;
+        let mut waiting_for_initial_session_configured = false;
+
+        let exit_reason = loop {
+            let control = select! {
+                Some(event) = app_event_rx.recv() => {
+                    app.handle_event(tui, event).await?
+                }
+                active = async {
+                    if let Some(rx) = app.active_thread_rx.as_mut() {
+                        rx.recv().await
+                    } else {
+                        None
+                    }
+                }, if App::should_handle_active_thread_events(
+                    waiting_for_initial_session_configured,
+                    app.active_thread_rx.is_some()
+                ) => {
+                    if let Some(event) = active {
+                        app.handle_active_thread_event(tui, event).await?;
+                    } else {
+                        app.clear_active_thread().await;
+                    }
+                    AppRunControl::Continue
+                }
+                Some(event) = tui_events.next() => {
+                    app.handle_tui_event(tui, event).await?
+                }
+                created = thread_created_rx.recv(), if listen_for_threads => {
+                    match created {
+                        Ok(thread_id) => {
+                            app.handle_thread_created(thread_id).await?;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            tracing::warn!("thread_created receiver lagged; skipping resync");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            listen_for_threads = false;
+                        }
+                    }
+                    AppRunControl::Continue
+                }
+            };
+            if App::should_stop_waiting_for_initial_session(
+                waiting_for_initial_session_configured,
+                app.primary_thread_id,
+            ) {
+                waiting_for_initial_session_configured = false;
+            }
+            match control {
+                AppRunControl::Continue => {}
+                AppRunControl::Exit(reason) => break reason,
+            }
+        };
+        tui.terminal.clear()?;
+        Ok(AppExitInfo {
+            token_usage: app.token_usage(),
+            thread_id: app.chat_widget.thread_id(),
+            thread_name: app.chat_widget.thread_name(),
+            update_action: app.pending_update_action,
+            exit_reason,
+        })
+    }
+
     pub(crate) async fn handle_tui_event(
         &mut self,
         tui: &mut tui::Tui,
@@ -1963,8 +2163,10 @@ impl App {
                             self.chat_widget.thread_id(),
                             self.chat_widget.thread_name(),
                         );
-                        match self
-                            .server
+                        let Some(s) = &self.server else {
+                            return Ok(AppRunControl::Continue);
+                        };
+                        match s
                             .resume_thread_from_rollout(
                                 resume_config.clone(),
                                 target_session.path.clone(),
@@ -2029,9 +2231,9 @@ impl App {
                 if let Some(path) = self.chat_widget.rollout_path() {
                     // Fresh threads expose a precomputed path, but the file is
                     // materialized lazily on first user message.
-                    if path.exists() {
-                        match self
-                            .server
+                    let server = self.server.clone();
+                    if path.exists() && let Some(s) = server {
+                        match s
                             .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
                             .await
                         {
@@ -3279,7 +3481,10 @@ impl App {
         if self.thread_event_channels.contains_key(&thread_id) {
             return Ok(());
         }
-        let thread = match self.server.get_thread(thread_id).await {
+        let Some(s) = &self.server else {
+            return Ok(());
+        };
+        let thread = match s.get_thread(thread_id).await {
             Ok(thread) => thread,
             Err(err) => {
                 tracing::warn!("failed to attach listener for thread {thread_id}: {err}");
@@ -4355,7 +4560,8 @@ mod tests {
         let otel_manager = test_otel_manager(&config, model.as_str());
 
         App {
-            server,
+            server: Some(server.clone()),
+            models_manager: server.get_models_manager(),
             otel_manager,
             app_event_tx,
             chat_widget,
@@ -4415,7 +4621,8 @@ mod tests {
 
         (
             App {
-                server,
+                server: Some(server.clone()),
+                models_manager: server.get_models_manager(),
                 otel_manager,
                 app_event_tx,
                 chat_widget,

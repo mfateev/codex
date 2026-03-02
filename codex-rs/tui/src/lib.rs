@@ -227,6 +227,45 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+/// Run the TUI backed by an external [`codex_core::AgentSession`] instead of
+/// the built-in codex `ThreadManager`.
+///
+/// This handles the full terminal lifecycle (init, alt-screen, restore) and
+/// delegates to `App::run_with_session` for the event loop.
+pub async fn run_with_session(
+    session: std::sync::Arc<dyn codex_core::AgentSession>,
+    session_configured: codex_protocol::protocol::SessionConfiguredEvent,
+    config: codex_core::config::Config,
+    auth_manager: std::sync::Arc<codex_core::AuthManager>,
+    models_manager: std::sync::Arc<codex_core::models_manager::manager::ModelsManager>,
+    model: String,
+    initial_prompt: Option<String>,
+) -> color_eyre::eyre::Result<AppExitInfo> {
+    color_eyre::install().ok();
+    let mut terminal = tui::init()?;
+    terminal.clear()?;
+    let mut tui = tui::Tui::new(terminal);
+    tui.set_alt_screen_enabled(true);
+
+    let feedback = codex_feedback::CodexFeedback::new();
+
+    let result = App::run_with_session(
+        &mut tui,
+        session,
+        session_configured,
+        config,
+        auth_manager,
+        models_manager,
+        model,
+        initial_prompt,
+        feedback,
+    )
+    .await;
+
+    restore();
+    result
+}
+
 pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (

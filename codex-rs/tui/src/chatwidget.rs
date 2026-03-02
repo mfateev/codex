@@ -257,6 +257,7 @@ mod agent;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 pub(crate) use self::agent::spawn_op_forwarder;
+pub(crate) use self::agent::wire_session;
 mod session_header;
 use self::session_header::SessionHeader;
 mod skills;
@@ -3275,6 +3276,10 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+
+        widget
+            .bottom_pane
+            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
         widget
     }
