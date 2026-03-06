@@ -695,6 +695,7 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    agent_browser: Option<Arc<dyn crate::ExternalAgentBrowser>>,
 }
 
 #[derive(Default)]
@@ -1750,6 +1751,7 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            agent_browser: None,
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -1886,6 +1888,7 @@ impl App {
         model: String,
         initial_prompt: Option<String>,
         feedback: codex_feedback::CodexFeedback,
+        agent_browser: Option<Arc<dyn crate::ExternalAgentBrowser>>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -1977,6 +1980,7 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            agent_browser,
         };
 
         let tui_events = tui.event_stream();
@@ -3160,6 +3164,73 @@ impl App {
             }
             AppEvent::SelectAgentThread(thread_id) => {
                 self.select_agent_thread(tui, thread_id).await?;
+            }
+            AppEvent::OpenSessionPicker => {
+                if let Some(browser) = self.agent_browser.clone() {
+                    let tx = self.app_event_tx.clone();
+                    tokio::spawn(async move {
+                        let entries = browser.list_sessions().await;
+                        tx.send(AppEvent::ExternalSessionsLoaded(entries));
+                    });
+                } else {
+                    self.chat_widget.add_info_message(
+                        "Session switching is not available in this mode.".into(),
+                        None,
+                    );
+                }
+            }
+            AppEvent::ExternalSessionsLoaded(entries) => {
+                if entries.is_empty() {
+                    self.chat_widget
+                        .add_info_message("No sessions found.".into(), None);
+                } else {
+                    let items: Vec<SelectionItem> = entries
+                        .iter()
+                        .map(|entry| {
+                            let id = entry.id.clone();
+                            SelectionItem {
+                                name: entry.name.clone(),
+                                description: entry.description.clone(),
+                                is_current: entry.is_current,
+                                actions: vec![Box::new(move |tx: &AppEventSender| {
+                                    tx.send(AppEvent::SwitchExternalSession(id.clone()));
+                                })],
+                                dismiss_on_select: true,
+                                ..Default::default()
+                            }
+                        })
+                        .collect();
+                    let initial_selected = entries.iter().position(|e| e.is_current);
+                    self.chat_widget.show_selection_view(SelectionViewParams {
+                        title: Some("Sessions".into()),
+                        subtitle: Some("Select a session to switch to".into()),
+                        footer_hint: Some(standard_popup_hint_line()),
+                        items,
+                        initial_selected_idx: initial_selected,
+                        ..Default::default()
+                    });
+                }
+            }
+            AppEvent::SwitchExternalSession(id) => {
+                if let Some(browser) = self.agent_browser.clone() {
+                    self.reset_for_thread_switch(tui)?;
+                    let tx = self.app_event_tx.clone();
+                    tokio::spawn(async move {
+                        match browser.switch_to(&id).await {
+                            Ok(result) => {
+                                tx.send(AppEvent::CodexEvent(Event {
+                                    id: String::new(),
+                                    msg: EventMsg::SessionConfigured(
+                                        result.session_configured,
+                                    ),
+                                }));
+                            }
+                            Err(err) => {
+                                tracing::error!(%err, "failed to switch session");
+                            }
+                        }
+                    });
+                }
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
@@ -4596,6 +4667,7 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            agent_browser: None,
         }
     }
 
@@ -4657,6 +4729,7 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                agent_browser: None,
             },
             rx,
             op_rx,

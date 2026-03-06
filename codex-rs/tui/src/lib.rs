@@ -227,6 +227,32 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+/// Entry returned by an external session browser.
+#[derive(Debug)]
+pub struct ExternalSessionEntry {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_current: bool,
+    pub is_closed: bool,
+}
+
+/// Result of switching to an external session.
+pub struct ExternalSwitchResult {
+    pub session_configured: codex_protocol::protocol::SessionConfiguredEvent,
+}
+
+/// Trait for listing and switching external sessions.
+///
+/// Implemented by Temporal harnesses (or other external backends) to allow
+/// the `/session` picker to show and switch between sessions.
+#[async_trait::async_trait]
+pub trait ExternalAgentBrowser: Send + Sync {
+    async fn list_sessions(&self) -> Vec<ExternalSessionEntry>;
+    async fn switch_to(&self, session_id: &str) -> color_eyre::eyre::Result<ExternalSwitchResult>;
+    fn current_session_id(&self) -> Option<String>;
+}
+
 /// Run the TUI backed by an external [`codex_core::AgentSession`] instead of
 /// the built-in codex `ThreadManager`.
 ///
@@ -240,6 +266,7 @@ pub async fn run_with_session(
     models_manager: std::sync::Arc<codex_core::models_manager::manager::ModelsManager>,
     model: String,
     initial_prompt: Option<String>,
+    agent_browser: Option<std::sync::Arc<dyn ExternalAgentBrowser>>,
 ) -> color_eyre::eyre::Result<AppExitInfo> {
     color_eyre::install().ok();
     let mut terminal = tui::init()?;
@@ -259,6 +286,7 @@ pub async fn run_with_session(
         model,
         initial_prompt,
         feedback,
+        agent_browser,
     )
     .await;
 

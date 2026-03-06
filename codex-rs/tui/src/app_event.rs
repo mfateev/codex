@@ -70,6 +70,15 @@ pub enum AppEvent {
     CodexEvent(Event),
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
+
+    /// Open the session picker for switching sessions (external backends).
+    OpenSessionPicker,
+
+    /// External sessions loaded from the harness (response to async query).
+    ExternalSessionsLoaded(Vec<crate::ExternalSessionEntry>),
+
+    /// Switch to an external session by its ID.
+    SwitchExternalSession(String),
     /// Switch the active thread to the selected agent.
     SelectAgentThread(ThreadId),
 

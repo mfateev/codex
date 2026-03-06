@@ -3611,6 +3611,9 @@ impl ChatWidget {
             SlashCommand::Agent => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
+            SlashCommand::Session => {
+                self.app_event_tx.send(AppEvent::OpenSessionPicker);
+            }
             SlashCommand::Approvals => {
                 self.open_permissions_popup();
             }
