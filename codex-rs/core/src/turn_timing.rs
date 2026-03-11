@@ -1,6 +1,8 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_otel::metrics::names::TURN_TTFM_DURATION_METRIC;
+use codex_otel::metrics::names::TURN_TTFT_DURATION_METRIC;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ResponseItem;
 use tokio::sync::Mutex;
@@ -8,9 +10,6 @@ use tokio::sync::Mutex;
 use crate::ResponseEvent;
 use crate::codex::TurnContext;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
-
-const TURN_TTFT_DURATION_METRIC: &str = "codex.turn.ttft.duration_ms";
-const TURN_TTFM_DURATION_METRIC: &str = "codex.turn.ttfm.duration_ms";
 
 pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &ResponseEvent) {
     let Some(duration) = turn_context
@@ -21,7 +20,7 @@ pub(crate) async fn record_turn_ttft_metric(turn_context: &TurnContext, event: &
         return;
     };
     turn_context
-        .otel_manager
+        .session_telemetry
         .record_duration(TURN_TTFT_DURATION_METRIC, duration, &[]);
 }
 
@@ -34,7 +33,7 @@ pub(crate) async fn record_turn_ttfm_metric(turn_context: &TurnContext, item: &T
         return;
     };
     turn_context
-        .otel_manager
+        .session_telemetry
         .record_duration(TURN_TTFM_DURATION_METRIC, duration, &[]);
 }
 
