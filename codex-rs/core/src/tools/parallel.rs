@@ -159,7 +159,9 @@ impl ToolCallRuntime {
             },
             ToolPayload::Mcp { .. } => ResponseInputItem::McpToolCallOutput {
                 call_id: call.call_id.clone(),
-                result: Err(Self::abort_message(call, secs)),
+                output: codex_protocol::mcp::CallToolResult::from_error_text(Self::abort_message(
+                    call, secs,
+                )),
             },
             _ => ResponseInputItem::FunctionCallOutput {
                 call_id: call.call_id.clone(),

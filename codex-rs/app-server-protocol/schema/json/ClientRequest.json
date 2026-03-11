@@ -58,6 +58,7 @@
                   "type": "boolean"
                 },
                 "request_permissions": {
+                  "default": false,
                   "type": "boolean"
                 },
                 "rules": {
@@ -65,11 +66,14 @@
                 },
                 "sandbox_approval": {
                   "type": "boolean"
+                },
+                "skill_approval": {
+                  "default": false,
+                  "type": "boolean"
                 }
               },
               "required": [
                 "mcp_elicitations",
-                "request_permissions",
                 "rules",
                 "sandbox_approval"
               ],
@@ -1131,6 +1135,10 @@
             "array",
             "null"
           ]
+        },
+        "forceRemoteSync": {
+          "description": "When true, reconcile the official curated marketplace against the remote plugin state before listing marketplaces.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2269,6 +2277,9 @@
             "string",
             "null"
           ]
+        },
+        "ephemeral": {
+          "type": "boolean"
         },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
