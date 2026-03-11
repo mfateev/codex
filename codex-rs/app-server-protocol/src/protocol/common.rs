@@ -211,6 +211,10 @@ client_request_definitions! {
         params: v2::ThreadSetNameParams,
         response: v2::ThreadSetNameResponse,
     },
+    ThreadMetadataUpdate => "thread/metadata/update" {
+        params: v2::ThreadMetadataUpdateParams,
+        response: v2::ThreadMetadataUpdateResponse,
+    },
     ThreadUnarchive => "thread/unarchive" {
         params: v2::ThreadUnarchiveParams,
         response: v2::ThreadUnarchiveResponse,
@@ -259,6 +263,10 @@ client_request_definitions! {
     SkillsConfigWrite => "skills/config/write" {
         params: v2::SkillsConfigWriteParams,
         response: v2::SkillsConfigWriteResponse,
+    },
+    PluginInstall => "plugin/install" {
+        params: v2::PluginInstallParams,
+        response: v2::PluginInstallResponse,
     },
     TurnStart => "turn/start" {
         params: v2::TurnStartParams,
@@ -749,6 +757,7 @@ server_notification_definitions! {
     ThreadArchived => "thread/archived" (v2::ThreadArchivedNotification),
     ThreadUnarchived => "thread/unarchived" (v2::ThreadUnarchivedNotification),
     ThreadClosed => "thread/closed" (v2::ThreadClosedNotification),
+    SkillsChanged => "skills/changed" (v2::SkillsChangedNotification),
     ThreadNameUpdated => "thread/name/updated" (v2::ThreadNameUpdatedNotification),
     ThreadTokenUsageUpdated => "thread/tokenUsage/updated" (v2::ThreadTokenUsageUpdatedNotification),
     TurnStarted => "turn/started" (v2::TurnStartedNotification),
