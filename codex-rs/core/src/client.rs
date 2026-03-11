@@ -118,6 +118,7 @@ pub trait ModelStreamer {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream>;
 
@@ -142,9 +143,10 @@ impl ModelStreamer for ModelClientSession {
         otel_manager: &OtelManager,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
+        service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
-        ModelClientSession::stream(self, prompt, model_info, otel_manager, effort, summary, turn_metadata_header).await
+        ModelClientSession::stream(self, prompt, model_info, otel_manager, effort, summary, service_tier, turn_metadata_header).await
     }
 
     fn try_switch_fallback_transport(

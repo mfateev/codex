@@ -740,6 +740,7 @@ impl TurnContext {
         ));
         TurnContext {
             sub_id,
+            realtime_active: false,
             config: config.clone(),
             auth_manager: None,
             model_info: model_info.clone(),
@@ -3157,6 +3158,7 @@ impl Session {
             provider: config.model_provider.clone(),
             collaboration_mode,
             model_reasoning_summary: config.model_reasoning_summary,
+            service_tier: config.service_tier,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions: config.user_instructions.clone(),
             personality: config.personality,
@@ -3177,6 +3179,7 @@ impl Session {
             session_source: SessionSource::Exec,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
+            inherited_shell_snapshot: None,
         };
 
         let otel_manager = OtelManager::new(
@@ -3195,6 +3198,7 @@ impl Session {
         let (tx_event, _rx_event) = async_channel::unbounded();
         let (agent_status_tx, _) = watch::channel(AgentStatus::PendingInit);
 
+        let plugins_manager = Arc::new(crate::plugins::PluginsManager::new(config.codex_home.clone()));
         let rollout = Arc::new(tokio::sync::Mutex::new(None));
         let services = SessionServices {
             mcp_connection_manager: Arc::new(RwLock::new(McpConnectionManager::new_uninitialized(
@@ -3223,7 +3227,9 @@ impl Session {
             models_manager,
             tool_approvals: tokio::sync::Mutex::new(ApprovalStore::default()),
             execve_session_approvals: RwLock::new(HashMap::new()),
-            skills_manager: Arc::new(SkillsManager::new(config.codex_home.clone())),
+            skills_manager: Arc::new(SkillsManager::new(config.codex_home.clone(), Arc::clone(&plugins_manager))),
+            plugins_manager: Arc::clone(&plugins_manager),
+            mcp_manager: Arc::new(crate::mcp::McpManager::new(plugins_manager)),
             file_watcher: Arc::new(FileWatcher::noop()),
             agent_control: AgentControl::default(),
             network_proxy: None,
@@ -3235,7 +3241,7 @@ impl Session {
                 session_configuration.provider.clone(),
                 session_configuration.session_source.clone(),
                 None,
-                None,
+                false,
                 false,
                 false,
                 None,
