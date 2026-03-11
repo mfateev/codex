@@ -1,6 +1,5 @@
 use std::path::Path;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use base64::Engine;

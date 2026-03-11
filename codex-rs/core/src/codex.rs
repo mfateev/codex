@@ -763,6 +763,7 @@ impl TurnContext {
         ));
         TurnContext {
             sub_id,
+            trace_id: None,
             realtime_active: false,
             config: config.clone(),
             auth_manager: None,
@@ -796,6 +797,7 @@ impl TurnContext {
             js_repl: Arc::new(JsReplHandle::with_node_path(None, vec![])),
             dynamic_tools: Vec::new(),
             turn_metadata_state,
+            turn_timing_state: Arc::new(TurnTimingState::default()),
             turn_skills: TurnSkillsContext::new(Arc::new(SkillLoadOutcome::default())),
         }
     }
