@@ -305,6 +305,7 @@ impl SessionTelemetry {
         active_profile: Option<String>,
     ) {
         log_and_trace_event!(
+            tracing::Level::INFO,
             self,
             common: {
                 event.name = "codex.conversation_starts",
@@ -368,6 +369,7 @@ impl SessionTelemetry {
             &[("status", status_str.as_str()), ("success", success_str)],
         );
         log_and_trace_event!(
+            tracing::Level::DEBUG,
             self,
             common: {
                 event.name = "codex.api_request",
@@ -394,6 +396,7 @@ impl SessionTelemetry {
             &[("success", success_str)],
         );
         log_and_trace_event!(
+            tracing::Level::DEBUG,
             self,
             common: {
                 event.name = "codex.websocket_request",
@@ -489,6 +492,7 @@ impl SessionTelemetry {
         self.counter(WEBSOCKET_EVENT_COUNT_METRIC, 1, &tags);
         self.record_duration(WEBSOCKET_EVENT_DURATION_METRIC, duration, &tags);
         log_and_trace_event!(
+            tracing::Level::TRACE,
             self,
             common: {
                 event.name = "codex.websocket_event",
@@ -561,6 +565,7 @@ impl SessionTelemetry {
             &[("kind", kind), ("success", "true")],
         );
         log_event!(
+            tracing::Level::TRACE,
             self,
             event.name = "codex.sse_event",
             event.kind = %kind,
@@ -585,6 +590,7 @@ impl SessionTelemetry {
         );
         match kind {
             Some(kind) => log_event!(
+                tracing::Level::TRACE,
                 self,
                 event.name = "codex.sse_event",
                 event.kind = %kind,
@@ -592,6 +598,7 @@ impl SessionTelemetry {
                 error.message = %error,
             ),
             None => log_event!(
+                tracing::Level::TRACE,
                 self,
                 event.name = "codex.sse_event",
                 duration_ms = %duration.as_millis(),
@@ -599,6 +606,7 @@ impl SessionTelemetry {
             ),
         }
         trace_event!(
+            tracing::Level::TRACE,
             self,
             event.name = "codex.sse_event",
             event.kind = %kind_str,
@@ -612,6 +620,7 @@ impl SessionTelemetry {
         T: std::fmt::Display,
     {
         log_and_trace_event!(
+            tracing::Level::DEBUG,
             self,
             common: {
                 event.name = "codex.sse_event",
@@ -632,6 +641,7 @@ impl SessionTelemetry {
         tool_token_count: i64,
     ) {
         log_and_trace_event!(
+            tracing::Level::DEBUG,
             self,
             common: {
                 event.name = "codex.sse_event",
@@ -675,12 +685,14 @@ impl SessionTelemetry {
         };
 
         log_event!(
+            tracing::Level::DEBUG,
             self,
             event.name = "codex.user_prompt",
             prompt_length = %prompt.chars().count(),
             prompt = %prompt_to_log,
         );
         trace_event!(
+            tracing::Level::DEBUG,
             self,
             event.name = "codex.user_prompt",
             prompt_length = %prompt.chars().count(),
@@ -698,6 +710,7 @@ impl SessionTelemetry {
         source: ToolDecisionSource,
     ) {
         log_event!(
+            tracing::Level::DEBUG,
             self,
             event.name = "codex.tool_decision",
             tool_name = %tool_name,
@@ -749,6 +762,7 @@ impl SessionTelemetry {
 
     pub fn log_tool_failed(&self, tool_name: &str, error: &str) {
         log_event!(
+            tracing::Level::DEBUG,
             self,
             event.name = "codex.tool_result",
             tool_name = %tool_name,
@@ -759,6 +773,7 @@ impl SessionTelemetry {
             mcp_server_origin = "",
         );
         trace_event!(
+            tracing::Level::DEBUG,
             self,
             event.name = "codex.tool_result",
             tool_name = %tool_name,
@@ -794,6 +809,7 @@ impl SessionTelemetry {
         let mcp_server = mcp_server.unwrap_or("");
         let mcp_server_origin = mcp_server_origin.unwrap_or("");
         log_event!(
+            tracing::Level::DEBUG,
             self,
             event.name = "codex.tool_result",
             tool_name = %tool_name,
@@ -806,6 +822,7 @@ impl SessionTelemetry {
             mcp_server_origin = %mcp_server_origin,
         );
         trace_event!(
+            tracing::Level::DEBUG,
             self,
             event.name = "codex.tool_result",
             tool_name = %tool_name,
