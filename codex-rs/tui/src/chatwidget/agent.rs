@@ -179,10 +179,17 @@ pub(crate) fn wire_session(
         let session_for_ops = session.clone();
         let op_task = tokio::spawn(async move {
             while let Some(op) = codex_op_rx.recv().await {
+                tracing::info!(
+                    op_type = %format!("{:?}", std::mem::discriminant(&op)),
+                    "hop4: wire_session op-forwarding task received op, calling session.submit"
+                );
                 if let Err(e) = session_for_ops.submit(op).await {
-                    tracing::error!("failed to submit op to session: {e}");
+                    tracing::error!("hop4: failed to submit op to session: {e}");
+                } else {
+                    tracing::info!("hop4: session.submit succeeded");
                 }
             }
+            tracing::warn!("hop4: wire_session op-forwarding task exited (channel closed)");
         });
 
         // Event-forwarding loop: session → UI.

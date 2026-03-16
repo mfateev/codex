@@ -259,6 +259,12 @@ impl ApprovalOverlay {
             self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
         let thread_id = request.thread_id();
+        tracing::info!(
+            approval_id = %id,
+            ?decision,
+            ?thread_id,
+            "hop1: handle_exec_decision sending SubmitThreadOp(ExecApproval)"
+        );
         self.app_event_tx.send(AppEvent::SubmitThreadOp {
             thread_id,
             op: Op::ExecApproval {

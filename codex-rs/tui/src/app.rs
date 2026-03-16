@@ -1221,11 +1221,16 @@ impl App {
     async fn submit_op_to_thread(&mut self, thread_id: ThreadId, op: Op) {
         let replay_state_op =
             ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
-        let submitted = if self.active_thread_id == Some(thread_id) {
+        let is_active = self.active_thread_id == Some(thread_id);
+        let submitted = if is_active {
             self.chat_widget.submit_op(op)
         } else {
             crate::session_log::log_outbound_op(&op);
             let Some(s) = &self.server else {
+                // No server (e.g. Temporal/external session). Fall through
+                // to the active widget — the op likely has a stale or
+                // default thread_id but should still reach the session.
+                self.chat_widget.submit_op(op);
                 return;
             };
             match s.get_thread(thread_id).await {
