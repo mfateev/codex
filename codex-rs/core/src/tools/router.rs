@@ -153,7 +153,7 @@ impl ToolRouter {
     }
 
     #[instrument(level = "trace", skip_all, err)]
-    pub(crate) async fn dispatch_tool_call_with_code_mode_result(
+    pub async fn dispatch_tool_call_with_code_mode_result(
         &self,
         session: Arc<Session>,
         turn: Arc<TurnContext>,

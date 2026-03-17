@@ -57,9 +57,9 @@ pub trait ToolHandler: Send + Sync {
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError>;
 }
 
-pub(crate) struct AnyToolResult {
-    pub(crate) call_id: String,
-    pub(crate) payload: ToolPayload,
+pub struct AnyToolResult {
+    pub call_id: String,
+    pub payload: ToolPayload,
     pub(crate) result: Box<dyn ToolOutput>,
 }
 

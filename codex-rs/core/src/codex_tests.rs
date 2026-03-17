@@ -3215,7 +3215,7 @@ async fn handle_output_item_done_records_image_save_message_after_successful_sav
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&session),
         turn_context: Arc::clone(&turn_context),
-        tool_handler: &test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
+        tool_runtime: &test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
     handle_output_item_done(&mut ctx, item.clone(), None)
@@ -3252,7 +3252,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let mut ctx = HandleOutputCtx {
         sess: Arc::clone(&session),
         turn_context: Arc::clone(&turn_context),
-        tool_handler: &test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
+        tool_runtime: &test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
         cancellation_token: CancellationToken::new(),
     };
     handle_output_item_done(&mut ctx, item.clone(), None)

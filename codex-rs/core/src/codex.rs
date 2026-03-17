@@ -116,7 +116,6 @@ use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
 use codex_utils_stream_parser::extract_proposed_plan_text;
 use codex_utils_stream_parser::strip_citations;
-use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
 use rmcp::model::ListResourceTemplatesResult;
@@ -6430,7 +6429,7 @@ async fn run_sampling_request<M: ModelStreamer>(
         base_instructions,
     );
 
-    let tool_handler = ToolCallRuntime::new(
+    let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
         Arc::clone(&sess),
         Arc::clone(&turn_context),
@@ -6443,7 +6442,7 @@ async fn run_sampling_request<M: ModelStreamer>(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             model_streamer,
-            &tool_handler,
+            &tool_runtime,
             turn_metadata_header,
             Arc::clone(&turn_diff_tracker),
             server_model_warning_emitted_for_turn,
@@ -7165,7 +7164,7 @@ pub async fn try_run_sampling_request<M: ModelStreamer, T: ToolCallHandler>(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     model_streamer: &mut M,
-    tool_handler: &T,
+    tool_runtime: &T,
     turn_metadata_header: Option<&str>,
     turn_diff_tracker: SharedTurnDiffTracker,
     server_model_warning_emitted_for_turn: &mut bool,
@@ -7275,7 +7274,7 @@ pub async fn try_run_sampling_request<M: ModelStreamer, T: ToolCallHandler>(
                 let mut ctx = HandleOutputCtx {
                     sess: sess.clone(),
                     turn_context: turn_context.clone(),
-                    tool_handler,
+                    tool_runtime,
                     cancellation_token: cancellation_token.child_token(),
                 };
 

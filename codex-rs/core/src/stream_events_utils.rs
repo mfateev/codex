@@ -155,7 +155,7 @@ impl<F> Default for OutputItemResult<F> {
 pub(crate) struct HandleOutputCtx<'a, T: ToolCallHandler> {
     pub sess: Arc<Session>,
     pub turn_context: Arc<TurnContext>,
-    pub tool_handler: &'a T,
+    pub tool_runtime: &'a T,
     pub cancellation_token: CancellationToken,
 }
 
@@ -183,7 +183,7 @@ pub(crate) async fn handle_output_item_done<T: ToolCallHandler>(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_future = ctx.tool_handler.handle_tool_call(call, cancellation_token);
+            let tool_future = ctx.tool_runtime.handle_tool_call(call, cancellation_token);
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
