@@ -17,9 +17,10 @@ use crate::codex::TurnContext;
 use crate::tools::ToolRouter;
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::code_mode_description::code_mode_tool_reference;
+use crate::tools::code_mode_description::normalize_code_mode_identifier;
 use crate::tools::context::FunctionToolOutput;
-use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
+use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouterParams;
@@ -32,6 +33,7 @@ const CODE_MODE_RUNNER_SOURCE: &str = include_str!("runner.cjs");
 const CODE_MODE_BRIDGE_SOURCE: &str = include_str!("bridge.js");
 const CODE_MODE_DESCRIPTION_TEMPLATE: &str = include_str!("description.md");
 const CODE_MODE_WAIT_DESCRIPTION_TEMPLATE: &str = include_str!("wait_description.md");
+const CODE_MODE_PRAGMA_PREFIX: &str = "// @exec:";
 
 pub(crate) const PUBLIC_TOOL_NAME: &str = "exec";
 pub(crate) const WAIT_TOOL_NAME: &str = "exec_wait";
@@ -42,7 +44,6 @@ pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
 pub(super) struct ExecContext {
     pub(super) session: Arc<Session>,
     pub(super) turn: Arc<TurnContext>,
-    pub(super) tracker: SharedTurnDiffTracker,
 }
 
 pub(crate) use execute_handler::CodeModeExecuteHandler;
@@ -57,7 +58,7 @@ enum CodeModeSessionProgress {
 enum CodeModeExecutionStatus {
     Completed,
     Failed,
-    Running(i32),
+    Running(String),
     Terminated,
 }
 
@@ -79,7 +80,7 @@ pub(crate) fn wait_tool_description() -> &'static str {
 
 async fn handle_node_message(
     exec: &ExecContext,
-    session_id: i32,
+    cell_id: String,
     message: protocol::NodeToHostMessage,
     poll_max_output_tokens: Option<Option<usize>>,
     started_at: std::time::Instant,
@@ -91,7 +92,7 @@ async fn handle_node_message(
             delta_items = truncate_code_mode_result(delta_items, poll_max_output_tokens.flatten());
             prepend_script_status(
                 &mut delta_items,
-                CodeModeExecutionStatus::Running(session_id),
+                CodeModeExecutionStatus::Running(cell_id),
                 started_at.elapsed(),
             );
             Ok(CodeModeSessionProgress::Yielded {
@@ -161,8 +162,8 @@ fn prepend_script_status(
         match status {
             CodeModeExecutionStatus::Completed => "Script completed".to_string(),
             CodeModeExecutionStatus::Failed => "Script failed".to_string(),
-            CodeModeExecutionStatus::Running(session_id) => {
-                format!("Script running with session ID {session_id}")
+            CodeModeExecutionStatus::Running(cell_id) => {
+                format!("Script running with cell ID {cell_id}")
             }
             CodeModeExecutionStatus::Terminated => "Script terminated".to_string(),
         }
@@ -222,6 +223,7 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<protocol::EnabledTool> {
     }
 
     let reference = code_mode_tool_reference(&tool_name);
+    let global_name = normalize_code_mode_identifier(&tool_name);
     let (description, kind) = match spec {
         ToolSpec::Function(tool) => (tool.description, protocol::CodeModeToolKind::Function),
         ToolSpec::Freeform(tool) => (tool.description, protocol::CodeModeToolKind::Freeform),
@@ -235,9 +237,10 @@ fn enabled_tool_from_spec(spec: ToolSpec) -> Option<protocol::EnabledTool> {
 
     Some(protocol::EnabledTool {
         tool_name,
+        global_name,
         module_path: reference.module_path,
         namespace: reference.namespace,
-        name: reference.tool_key,
+        name: normalize_code_mode_identifier(&reference.tool_key),
         description,
         kind,
     })
@@ -270,15 +273,15 @@ async fn build_nested_router(exec: &ExecContext) -> ToolRouter {
 
 async fn call_nested_tool(
     exec: ExecContext,
+    tool_runtime: ToolCallRuntime,
     tool_name: String,
     input: Option<JsonValue>,
+    cancellation_token: tokio_util::sync::CancellationToken,
 ) -> JsonValue {
     if tool_name == PUBLIC_TOOL_NAME {
         return JsonValue::String(format!("{PUBLIC_TOOL_NAME} cannot invoke itself"));
     }
 
-    let router = build_nested_router(&exec).await;
-    let specs = router.specs();
     let payload =
         if let Some((server, tool)) = exec.session.parse_mcp_tool_name(&tool_name, &None).await {
             match serialize_function_tool_arguments(&tool_name, input) {
@@ -290,7 +293,7 @@ async fn call_nested_tool(
                 Err(error) => return JsonValue::String(error),
             }
         } else {
-            match build_nested_tool_payload(&specs, &tool_name, input) {
+            match build_nested_tool_payload(tool_runtime.find_spec(&tool_name), &tool_name, input) {
                 Ok(payload) => payload,
                 Err(error) => return JsonValue::String(error),
             }
@@ -302,14 +305,8 @@ async fn call_nested_tool(
         tool_namespace: None,
         payload,
     };
-    let result = router
-        .dispatch_tool_call_with_code_mode_result(
-            exec.session.clone(),
-            exec.turn.clone(),
-            exec.tracker.clone(),
-            call,
-            ToolCallSource::CodeMode,
-        )
+    let result = tool_runtime
+        .handle_tool_call_with_source(call, ToolCallSource::CodeMode, cancellation_token)
         .await;
 
     match result {
@@ -327,22 +324,20 @@ fn tool_kind_for_spec(spec: &ToolSpec) -> protocol::CodeModeToolKind {
 }
 
 fn tool_kind_for_name(
-    specs: &[ToolSpec],
+    spec: Option<ToolSpec>,
     tool_name: &str,
 ) -> Result<protocol::CodeModeToolKind, String> {
-    specs
-        .iter()
-        .find(|spec| spec.name() == tool_name)
+    spec.as_ref()
         .map(tool_kind_for_spec)
         .ok_or_else(|| format!("tool `{tool_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
 }
 
 fn build_nested_tool_payload(
-    specs: &[ToolSpec],
+    spec: Option<ToolSpec>,
     tool_name: &str,
     input: Option<JsonValue>,
 ) -> Result<ToolPayload, String> {
-    let actual_kind = tool_kind_for_name(specs, tool_name)?;
+    let actual_kind = tool_kind_for_name(spec, tool_name)?;
     match actual_kind {
         protocol::CodeModeToolKind::Function => build_function_tool_payload(tool_name, input),
         protocol::CodeModeToolKind::Freeform => build_freeform_tool_payload(tool_name, input),

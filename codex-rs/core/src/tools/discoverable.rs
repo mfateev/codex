@@ -84,7 +84,7 @@ impl From<DiscoverablePluginInfo> for DiscoverableTool {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DiscoverablePluginInfo {
+pub struct DiscoverablePluginInfo {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) description: Option<String>,

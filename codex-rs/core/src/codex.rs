@@ -106,6 +106,7 @@ use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::request_permissions::RequestPermissionsArgs;
 use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
@@ -591,7 +592,6 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
-        let session_init_span = info_span!("session_init");
         let session = Session::new(
             session_configuration,
             config.clone(),
@@ -608,7 +608,6 @@ impl Codex {
             file_watcher,
             agent_control,
         )
-        .instrument(session_init_span)
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
@@ -1447,6 +1446,7 @@ impl Session {
         }
     }
 
+    #[instrument(name = "session_init", level = "info", skip_all)]
     #[allow(clippy::too_many_arguments)]
     async fn new(
         mut session_configuration: SessionConfiguration,
@@ -1538,18 +1538,29 @@ impl Session {
                 .await?;
                 Ok((Some(rollout_recorder), state_db_ctx))
             }
-        };
+        }
+        .instrument(info_span!(
+            "session_init.rollout",
+            otel.name = "session_init.rollout",
+            session_init.ephemeral = config.ephemeral,
+        ));
 
+        let is_subagent = matches!(
+            session_configuration.session_source,
+            SessionSource::SubAgent(_)
+        );
         let history_meta_fut = async {
-            if matches!(
-                session_configuration.session_source,
-                SessionSource::SubAgent(_)
-            ) {
+            if is_subagent {
                 (0, 0)
             } else {
                 crate::message_history::history_metadata(&config).await
             }
-        };
+        }
+        .instrument(info_span!(
+            "session_init.history_metadata",
+            otel.name = "session_init.history_metadata",
+            session_init.is_subagent = is_subagent,
+        ));
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
@@ -1562,7 +1573,11 @@ impl Session {
             )
             .await;
             (auth, mcp_servers, auth_statuses)
-        };
+        }
+        .instrument(info_span!(
+            "session_init.auth_mcp",
+            otel.name = "session_init.auth_mcp",
+        ));
 
         // Join all independent futures.
         let (
@@ -1720,7 +1735,12 @@ impl Session {
             tx
         };
         let thread_name =
-            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id).await
+            match session_index::find_thread_name_by_id(&config.codex_home, &conversation_id)
+                .instrument(info_span!(
+                    "session_init.thread_name_lookup",
+                    otel.name = "session_init.thread_name_lookup",
+                ))
+                .await
             {
                 Ok(name) => name,
                 Err(err) => {
@@ -1770,6 +1790,12 @@ impl Session {
                     managed_network_requirements_enabled,
                     network_proxy_audit_metadata,
                 )
+                .instrument(info_span!(
+                    "session_init.network_proxy",
+                    otel.name = "session_init.network_proxy",
+                    session_init.managed_network_requirements_enabled =
+                        managed_network_requirements_enabled,
+                ))
                 .await?;
                 (Some(network_proxy), Some(session_network_proxy))
             } else {
@@ -1925,6 +1951,8 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
+        let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
+        let required_mcp_server_count = required_mcp_servers.len();
         let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
@@ -1942,6 +1970,12 @@ impl Session {
             codex_apps_tools_cache_key(auth),
             tool_plugin_provenance,
         )
+        .instrument(info_span!(
+            "session_init.mcp_manager_init",
+            otel.name = "session_init.mcp_manager_init",
+            session_init.enabled_mcp_server_count = enabled_mcp_server_count,
+            session_init.required_mcp_server_count = required_mcp_server_count,
+        ))
         .await;
         {
             let mut manager_guard = sess.services.mcp_connection_manager.write().await;
@@ -1961,6 +1995,11 @@ impl Session {
                 .read()
                 .await
                 .required_startup_failures(&required_mcp_servers)
+                .instrument(info_span!(
+                    "session_init.required_mcp_wait",
+                    otel.name = "session_init.required_mcp_wait",
+                    session_init.required_mcp_server_count = required_mcp_server_count,
+                ))
                 .await;
             if !failures.is_empty() {
                 let details = failures
@@ -3011,22 +3050,22 @@ impl Session {
         match turn_context.approval_policy.value() {
             AskForApproval::Never => {
                 return Some(RequestPermissionsResponse {
-                    permissions: PermissionProfile::default(),
+                    permissions: RequestPermissionProfile::default(),
                     scope: PermissionGrantScope::Turn,
                 });
             }
-            AskForApproval::Reject(reject_config)
-                if reject_config.rejects_request_permissions() =>
+            AskForApproval::Granular(granular_config)
+                if !granular_config.allows_request_permissions() =>
             {
                 return Some(RequestPermissionsResponse {
-                    permissions: PermissionProfile::default(),
+                    permissions: RequestPermissionProfile::default(),
                     scope: PermissionGrantScope::Turn,
                 });
             }
             AskForApproval::OnFailure
             | AskForApproval::OnRequest
             | AskForApproval::UnlessTrusted
-            | AskForApproval::Reject(_) => {}
+            | AskForApproval::Granular(_) => {}
         }
 
         let (tx_response, rx_response) = oneshot::channel();
@@ -3205,7 +3244,7 @@ impl Session {
                     if entry.is_some() && !response.permissions.is_empty() {
                         match response.scope {
                             PermissionGrantScope::Turn => {
-                                ts.record_granted_permissions(response.permissions.clone());
+                                ts.record_granted_permissions(response.permissions.clone().into());
                             }
                             PermissionGrantScope::Session => {
                                 granted_for_session = Some(response.permissions.clone());
@@ -3219,7 +3258,7 @@ impl Session {
         };
         if let Some(permissions) = granted_for_session {
             let mut state = self.state.lock().await;
-            state.record_granted_permissions(permissions);
+            state.record_granted_permissions(permissions.into());
         }
         match entry {
             Some(tx_response) => {
@@ -3656,7 +3695,12 @@ impl Session {
                 turn_context.approval_policy.value(),
                 self.services.exec_policy.current().as_ref(),
                 &turn_context.cwd,
-                turn_context.features.enabled(Feature::RequestPermissions),
+                turn_context
+                    .features
+                    .enabled(Feature::ExecPermissionApprovals),
+                turn_context
+                    .features
+                    .enabled(Feature::RequestPermissionsTool),
             )
             .into_text(),
         );
@@ -4541,11 +4585,23 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
 }
 
 fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
+    let op_name = sub.op.kind();
+    let span_name = format!("op.dispatch.{op_name}");
     let dispatch_span = match &sub.op {
         Op::RealtimeConversationAudio(_) => {
-            debug_span!("submission_dispatch", submission.id = sub.id.as_str())
+            debug_span!(
+                "submission_dispatch",
+                otel.name = span_name.as_str(),
+                submission.id = sub.id.as_str(),
+                codex.op = op_name
+            )
         }
-        _ => info_span!("submission_dispatch", submission.id = sub.id.as_str()),
+        _ => info_span!(
+            "submission_dispatch",
+            otel.name = span_name.as_str(),
+            submission.id = sub.id.as_str(),
+            codex.op = op_name
+        ),
     };
     if let Some(trace) = sub.trace.as_ref()
         && !set_parent_from_w3c_trace_context(&dispatch_span, trace)
@@ -5776,6 +5832,10 @@ async fn run_turn_inner(
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+    let mentioned_plugin_metadata = mentioned_plugins
+        .iter()
+        .filter_map(crate::plugins::PluginCapabilitySummary::telemetry_metadata)
+        .collect::<Vec<_>>();
 
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
@@ -5814,6 +5874,11 @@ async fn run_turn_inner(
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
+    for plugin in mentioned_plugin_metadata {
+        sess.services
+            .analytics_events_client
+            .track_plugin_used(tracking.clone(), plugin);
+    }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
 
@@ -5847,11 +5912,6 @@ async fn run_turn_inner(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-    let _code_mode_worker = sess
-        .services
-        .code_mode_service
-        .start_turn_worker(&sess, &turn_context, &turn_diff_tracker)
-        .await;
     let mut server_model_warning_emitted_for_turn = false;
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
@@ -5866,7 +5926,7 @@ async fn run_turn_inner(
                 AskForApproval::UnlessTrusted
                 | AskForApproval::OnFailure
                 | AskForApproval::OnRequest
-                | AskForApproval::Reject(_) => "default",
+                | AskForApproval::Granular(_) => "default",
             }
             .to_string();
             let session_start_request = codex_hooks::SessionStartRequest {
@@ -6015,7 +6075,7 @@ async fn run_turn_inner(
                         AskForApproval::UnlessTrusted
                         | AskForApproval::OnFailure
                         | AskForApproval::OnRequest
-                        | AskForApproval::Reject(_) => "default",
+                        | AskForApproval::Granular(_) => "default",
                     }
                     .to_string();
                     let stop_request = codex_hooks::StopRequest {
@@ -6457,14 +6517,22 @@ async fn run_sampling_request<M: ModelStreamer>(
         turn_context.as_ref(),
         base_instructions,
     );
-
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
         Arc::clone(&sess),
         Arc::clone(&turn_context),
         Arc::clone(&turn_diff_tracker),
     );
-
+    let _code_mode_worker = sess
+        .services
+        .code_mode_service
+        .start_turn_worker(
+            &sess,
+            &turn_context,
+            Arc::clone(&router),
+            Arc::clone(&turn_diff_tracker),
+        )
+        .await;
     let mut retries = 0;
     loop {
         let err = match try_run_sampling_request(

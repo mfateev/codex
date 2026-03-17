@@ -106,6 +106,7 @@ pub type NewConversation = NewThread;
 #[deprecated(note = "use CodexThread")]
 pub type CodexConversation = CodexThread;
 // Re-export common auth types for workspace consumers
+pub use analytics_client::AnalyticsEventsClient;
 pub use auth::AuthManager;
 pub use auth::AuthProvider;
 pub use auth::CodexAuth;
