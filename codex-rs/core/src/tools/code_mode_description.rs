@@ -75,11 +75,9 @@ fn append_code_mode_sample(
     output_type: String,
 ) -> String {
     let reference = code_mode_tool_reference(tool_name);
-    let local_name = code_mode_local_name(&reference.tool_key);
-
     format!(
-        "{description}\n\nCode mode declaration:\n```ts\nimport {{ tools }} from \"{}\";\ndeclare function {local_name}({input_name}: {input_type}): Promise<{output_type}>;\n```",
-        reference.module_path
+        "{description}\n\nCode mode declaration:\n```ts\nimport {{ {} }} from \"{}\";\ndeclare function {}({input_name}: {input_type}): Promise<{output_type}>;\n```",
+        reference.tool_key, reference.module_path, reference.tool_key
     )
 }
 
@@ -98,22 +96,6 @@ fn code_mode_local_name(tool_key: &str) -> String {
         } else {
             identifier.push('_');
         }
-    }
-
-    if identifier.is_empty() {
-        return "tool_call".to_string();
-    }
-
-    if identifier == "tools" {
-        identifier.push_str("_tool");
-    }
-
-    if identifier
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_ascii_digit())
-    {
-        identifier.insert(0, '_');
     }
 
     identifier
@@ -309,80 +291,5 @@ fn render_json_schema_literal(value: &JsonValue) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::render_json_schema_to_typescript;
-    use pretty_assertions::assert_eq;
-    use serde_json::json;
-
-    #[test]
-    fn render_json_schema_to_typescript_renders_object_properties() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "recursive": {"type": "boolean"}
-            },
-            "required": ["path"],
-            "additionalProperties": false
-        });
-
-        assert_eq!(
-            render_json_schema_to_typescript(&schema),
-            "{\n  path: string;\n  recursive?: boolean;\n}"
-        );
-    }
-
-    #[test]
-    fn render_json_schema_to_typescript_renders_anyof_unions() {
-        let schema = json!({
-            "anyOf": [
-                {"const": "pending"},
-                {"const": "done"},
-                {"type": "number"}
-            ]
-        });
-
-        assert_eq!(
-            render_json_schema_to_typescript(&schema),
-            "\"pending\" | \"done\" | number"
-        );
-    }
-
-    #[test]
-    fn render_json_schema_to_typescript_renders_additional_properties() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "tags": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                }
-            },
-            "additionalProperties": {"type": "integer"}
-        });
-
-        assert_eq!(
-            render_json_schema_to_typescript(&schema),
-            "{\n  tags?: Array<string>;\n  [key: string]: number;\n}"
-        );
-    }
-
-    #[test]
-    fn render_json_schema_to_typescript_sorts_object_properties() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "structuredContent": {"type": "string"},
-                "_meta": {"type": "string"},
-                "isError": {"type": "boolean"},
-                "content": {"type": "array", "items": {"type": "string"}}
-            },
-            "required": ["content"]
-        });
-
-        assert_eq!(
-            render_json_schema_to_typescript(&schema),
-            "{\n  _meta?: string;\n  content: Array<string>;\n  isError?: boolean;\n  structuredContent?: string;\n}"
-        );
-    }
-}
+#[path = "code_mode_description_tests.rs"]
+mod tests;

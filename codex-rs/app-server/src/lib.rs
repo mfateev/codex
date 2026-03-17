@@ -103,6 +103,8 @@ enum OutboundControlEvent {
     Opened {
         connection_id: ConnectionId,
         writer: mpsc::Sender<crate::outgoing_message::OutgoingMessage>,
+        // Allow codex/event/* notifications to be emitted.
+        allow_legacy_notifications: bool,
         disconnect_sender: Option<CancellationToken>,
         initialized: Arc<AtomicBool>,
         experimental_api_enabled: Arc<AtomicBool>,
@@ -466,6 +468,14 @@ pub async fn run_main_with_transport(
     if let Some(warning) = project_config_warning(&config) {
         config_warnings.push(warning);
     }
+    for warning in &config.startup_warnings {
+        config_warnings.push(ConfigWarningNotification {
+            summary: warning.clone(),
+            details: None,
+            path: None,
+            range: None,
+        });
+    }
 
     let feedback = CodexFeedback::new();
 
@@ -541,6 +551,7 @@ pub async fn run_main_with_transport(
                             OutboundControlEvent::Opened {
                                 connection_id,
                                 writer,
+                                allow_legacy_notifications,
                                 disconnect_sender,
                                 initialized,
                                 experimental_api_enabled,
@@ -553,6 +564,7 @@ pub async fn run_main_with_transport(
                                         initialized,
                                         experimental_api_enabled,
                                         opted_out_notification_methods,
+                                        allow_legacy_notifications,
                                         disconnect_sender,
                                     ),
                                 );
@@ -650,6 +662,7 @@ pub async fn run_main_with_transport(
                             TransportEvent::ConnectionOpened {
                                 connection_id,
                                 writer,
+                                allow_legacy_notifications,
                                 disconnect_sender,
                             } => {
                                 let outbound_initialized = Arc::new(AtomicBool::new(false));
@@ -661,6 +674,7 @@ pub async fn run_main_with_transport(
                                     .send(OutboundControlEvent::Opened {
                                         connection_id,
                                         writer,
+                                        allow_legacy_notifications,
                                         disconnect_sender,
                                         initialized: Arc::clone(&outbound_initialized),
                                         experimental_api_enabled: Arc::clone(
@@ -803,6 +817,10 @@ pub async fn run_main_with_transport(
                 }
             }
 
+            if !shutdown_state.forced() {
+                processor.drain_background_tasks().await;
+                processor.shutdown_threads().await;
+            }
             info!("processor task exited (channel closed)");
         }
     });
