@@ -5,9 +5,12 @@ use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::features::Feature;
 use crate::features::Features;
+use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
+use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::code_mode::WAIT_TOOL_NAME;
 use crate::tools::code_mode::is_code_mode_nested_tool;
@@ -46,12 +49,14 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 const TOOL_SEARCH_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
@@ -203,10 +208,46 @@ pub enum ShellCommandBackendConfig {
     ZshFork,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum UnifiedExecBackendConfig {
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum UnifiedExecShellMode {
     Direct,
-    ZshFork,
+    ZshFork(ZshForkConfig),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ZshForkConfig {
+    pub(crate) shell_zsh_path: AbsolutePathBuf,
+    pub(crate) main_execve_wrapper_exe: AbsolutePathBuf,
+}
+
+impl UnifiedExecShellMode {
+    pub fn for_session(
+        shell_command_backend: ShellCommandBackendConfig,
+        user_shell: &Shell,
+        shell_zsh_path: Option<&PathBuf>,
+        main_execve_wrapper_exe: Option<&PathBuf>,
+    ) -> Self {
+        if cfg!(unix)
+            && shell_command_backend == ShellCommandBackendConfig::ZshFork
+            && matches!(user_shell.shell_type, ShellType::Zsh)
+            && let (Some(shell_zsh_path), Some(main_execve_wrapper_exe)) =
+                (shell_zsh_path, main_execve_wrapper_exe)
+            && let (Ok(shell_zsh_path), Ok(main_execve_wrapper_exe)) = (
+                AbsolutePathBuf::try_from(shell_zsh_path.as_path())
+                    .inspect_err(|e| tracing::warn!("Failed to convert shell_zsh_path `{shell_zsh_path:?}`: {e:?}")),
+                AbsolutePathBuf::try_from(main_execve_wrapper_exe.as_path()).inspect_err(|e| {
+                    tracing::warn!("Failed to convert main_execve_wrapper_exe `{main_execve_wrapper_exe:?}`: {e:?}")
+                }),
+            )
+        {
+            Self::ZshFork(ZshForkConfig {
+                shell_zsh_path,
+                main_execve_wrapper_exe,
+            })
+        } else {
+            Self::Direct
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -214,7 +255,7 @@ pub struct ToolsConfig {
     pub available_models: Vec<ModelPreset>,
     pub shell_type: ConfigShellToolType,
     shell_command_backend: ShellCommandBackendConfig,
-    pub unified_exec_backend: UnifiedExecBackendConfig,
+    pub unified_exec_shell_mode: UnifiedExecShellMode,
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -300,13 +341,6 @@ impl ToolsConfig {
             } else {
                 ShellCommandBackendConfig::Classic
             };
-        let unified_exec_backend =
-            if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
-                UnifiedExecBackendConfig::ZshFork
-            } else {
-                UnifiedExecBackendConfig::Direct
-            };
-
         let unified_exec_allowed = unified_exec_allowed_in_environment(
             cfg!(target_os = "windows"),
             sandbox_policy,
@@ -353,7 +387,7 @@ impl ToolsConfig {
             available_models: available_models_ref.to_vec(),
             shell_type,
             shell_command_backend,
-            unified_exec_backend,
+            unified_exec_shell_mode: UnifiedExecShellMode::Direct,
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -387,6 +421,29 @@ impl ToolsConfig {
 
     pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
         self.allow_login_shell = allow_login_shell;
+        self
+    }
+
+    pub fn with_unified_exec_shell_mode(
+        mut self,
+        unified_exec_shell_mode: UnifiedExecShellMode,
+    ) -> Self {
+        self.unified_exec_shell_mode = unified_exec_shell_mode;
+        self
+    }
+
+    pub fn with_unified_exec_shell_mode_for_session(
+        mut self,
+        user_shell: &Shell,
+        shell_zsh_path: Option<&PathBuf>,
+        main_execve_wrapper_exe: Option<&PathBuf>,
+    ) -> Self {
+        self.unified_exec_shell_mode = UnifiedExecShellMode::for_session(
+            self.shell_command_backend,
+            user_shell,
+            shell_zsh_path,
+            main_execve_wrapper_exe,
+        );
         self
     }
 
@@ -1617,21 +1674,57 @@ fn create_tool_search_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSpec {
             },
         ),
     ]);
-    let mut app_names = app_tools
-        .values()
-        .filter_map(|tool| tool.connector_name.clone())
-        .collect::<Vec<_>>();
-    app_names.sort();
-    app_names.dedup();
-    let app_names = app_names.join(", ");
+    let mut app_descriptions = BTreeMap::new();
+    for tool in app_tools.values() {
+        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
+            continue;
+        }
 
-    let description = if app_names.is_empty() {
-        TOOL_SEARCH_DESCRIPTION_TEMPLATE
-            .replace("({{app_names}})", "(None currently enabled)")
-            .replace("{{app_names}}", "available apps")
+        let Some(connector_name) = tool
+            .connector_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|connector_name| !connector_name.is_empty())
+        else {
+            continue;
+        };
+
+        let connector_description = tool
+            .connector_description
+            .as_deref()
+            .map(str::trim)
+            .filter(|connector_description| !connector_description.is_empty())
+            .map(str::to_string);
+
+        app_descriptions
+            .entry(connector_name.to_string())
+            .and_modify(|existing: &mut Option<String>| {
+                if existing.is_none() {
+                    *existing = connector_description.clone();
+                }
+            })
+            .or_insert(connector_description);
+    }
+
+    let app_descriptions = if app_descriptions.is_empty() {
+        "None currently enabled.".to_string()
     } else {
-        TOOL_SEARCH_DESCRIPTION_TEMPLATE.replace("{{app_names}}", app_names.as_str())
+        app_descriptions
+            .into_iter()
+            .map(
+                |(connector_name, connector_description)| match connector_description {
+                    Some(connector_description) => {
+                        format!("- {connector_name}: {connector_description}")
+                    }
+                    None => format!("- {connector_name}"),
+                },
+            )
+            .collect::<Vec<_>>()
+            .join("\n")
     };
+
+    let description =
+        TOOL_SEARCH_DESCRIPTION_TEMPLATE.replace("{{app_descriptions}}", app_descriptions.as_str());
 
     ToolSpec::ToolSearch {
         execution: "client".to_string(),
@@ -2165,7 +2258,7 @@ fn push_tool_spec(
 ) {
     let spec = augment_tool_spec_for_code_mode(spec, code_mode_enabled);
     if supports_parallel_tool_calls {
-        builder.push_spec_with_parallel_support(spec, true);
+        builder.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls*/ true);
     } else {
         builder.push_spec(spec);
     }
@@ -2472,14 +2565,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
             &nested_config,
             mcp_tools.clone(),
             app_tools.clone(),
-            None,
+            /*discoverable_tools*/ None,
             dynamic_tools,
         )
         .build();
         let mut enabled_tools = nested_specs
             .into_iter()
             .filter_map(|spec| {
-                let (name, description) = match augment_tool_spec_for_code_mode(spec.spec, true) {
+                let (name, description) = match augment_tool_spec_for_code_mode(
+                    spec.spec, /*code_mode_enabled*/ true,
+                ) {
                     ToolSpec::Function(tool) => (tool.name, tool.description),
                     ToolSpec::Freeform(tool) => (tool.name, tool.description),
                     _ => return None,
@@ -2492,14 +2587,14 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_code_mode_tool(&enabled_tools, config.code_mode_only_enabled),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler(PUBLIC_TOOL_NAME, code_mode_handler);
         push_tool_spec(
             &mut builder,
             create_exec_wait_tool(),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler(WAIT_TOOL_NAME, code_mode_wait_handler);
@@ -2510,7 +2605,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             push_tool_spec(
                 &mut builder,
                 create_shell_tool(exec_permission_approvals_enabled),
-                true,
+                /*supports_parallel_tool_calls*/ true,
                 config.code_mode_enabled,
             );
         }
@@ -2518,7 +2613,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             push_tool_spec(
                 &mut builder,
                 ToolSpec::LocalShell {},
-                true,
+                /*supports_parallel_tool_calls*/ true,
                 config.code_mode_enabled,
             );
         }
@@ -2529,13 +2624,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     config.allow_login_shell,
                     exec_permission_approvals_enabled,
                 ),
-                true,
+                /*supports_parallel_tool_calls*/ true,
                 config.code_mode_enabled,
             );
             push_tool_spec(
                 &mut builder,
                 create_write_stdin_tool(),
-                false,
+                /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
             builder.register_handler("exec_command", unified_exec_handler.clone());
@@ -2551,7 +2646,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     config.allow_login_shell,
                     exec_permission_approvals_enabled,
                 ),
-                true,
+                /*supports_parallel_tool_calls*/ true,
                 config.code_mode_enabled,
             );
         }
@@ -2569,19 +2664,19 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_list_mcp_resources_tool(),
-            true,
+            /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
         push_tool_spec(
             &mut builder,
             create_list_mcp_resource_templates_tool(),
-            true,
+            /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
         push_tool_spec(
             &mut builder,
             create_read_mcp_resource_tool(),
-            true,
+            /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
         builder.register_handler("list_mcp_resources", mcp_resource_handler.clone());
@@ -2592,7 +2687,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     push_tool_spec(
         &mut builder,
         PLAN_TOOL.clone(),
-        false,
+        /*supports_parallel_tool_calls*/ false,
         config.code_mode_enabled,
     );
     builder.register_handler("update_plan", plan_handler);
@@ -2601,13 +2696,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_js_repl_tool(),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         push_tool_spec(
             &mut builder,
             create_js_repl_reset_tool(),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler("js_repl", js_repl_handler);
@@ -2620,7 +2715,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             create_request_user_input_tool(CollaborationModesConfig {
                 default_mode_request_user_input: config.default_mode_request_user_input,
             }),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler("request_user_input", request_user_input_handler);
@@ -2630,7 +2725,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_request_permissions_tool(),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler("request_permissions", request_permissions_handler);
@@ -2643,7 +2738,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_tool_search_tool(&app_tools),
-            true,
+            /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
         builder.register_handler(TOOL_SEARCH_TOOL_NAME, search_tool_handler);
@@ -2661,7 +2756,10 @@ pub(crate) fn build_specs_with_discoverable_tools(
             .as_ref()
             .filter(|tools| !tools.is_empty())
     {
-        builder.push_spec_with_parallel_support(create_tool_suggest_tool(discoverable_tools), true);
+        builder.push_spec_with_parallel_support(
+            create_tool_suggest_tool(discoverable_tools),
+            /*supports_parallel_tool_calls*/ true,
+        );
         builder.register_handler(TOOL_SUGGEST_TOOL_NAME, tool_suggest_handler);
     }
 
@@ -2671,7 +2769,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 push_tool_spec(
                     &mut builder,
                     create_apply_patch_freeform_tool(),
-                    false,
+                    /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
                 );
             }
@@ -2679,7 +2777,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 push_tool_spec(
                     &mut builder,
                     create_apply_patch_json_tool(),
-                    false,
+                    /*supports_parallel_tool_calls*/ false,
                     config.code_mode_enabled,
                 );
             }
@@ -2695,7 +2793,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_grep_files_tool(),
-            true,
+            /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
         builder.register_handler("grep_files", grep_files_handler);
@@ -2709,7 +2807,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_read_file_tool(),
-            true,
+            /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
         builder.register_handler("read_file", read_file_handler);
@@ -2724,7 +2822,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_list_dir_tool(),
-            true,
+            /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
         builder.register_handler("list_dir", list_dir_handler);
@@ -2738,7 +2836,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_test_sync_tool(),
-            true,
+            /*supports_parallel_tool_calls*/ true,
             config.code_mode_enabled,
         );
         builder.register_handler("test_sync_tool", test_sync_handler);
@@ -2779,7 +2877,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     .and_then(|cfg| cfg.search_context_size),
                 search_content_types,
             },
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
     }
@@ -2790,7 +2888,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             ToolSpec::ImageGeneration {
                 output_format: "png".to_string(),
             },
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
     }
@@ -2798,7 +2896,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
     push_tool_spec(
         &mut builder,
         create_view_image_tool(config.can_request_original_image_detail),
-        true,
+        /*supports_parallel_tool_calls*/ true,
         config.code_mode_enabled,
     );
     builder.register_handler("view_image", view_image_handler);
@@ -2807,7 +2905,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_artifacts_tool(),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler("artifacts", artifacts_handler);
@@ -2817,31 +2915,31 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_spawn_agent_tool(config),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         push_tool_spec(
             &mut builder,
             create_send_input_tool(),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         push_tool_spec(
             &mut builder,
             create_resume_agent_tool(),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         push_tool_spec(
             &mut builder,
             create_wait_agent_tool(),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         push_tool_spec(
             &mut builder,
             create_close_agent_tool(),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler("spawn_agent", Arc::new(SpawnAgentHandler));
@@ -2856,7 +2954,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
         push_tool_spec(
             &mut builder,
             create_spawn_agents_on_csv_tool(),
-            false,
+            /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
         builder.register_handler("spawn_agents_on_csv", agent_jobs_handler.clone());
@@ -2864,7 +2962,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             push_tool_spec(
                 &mut builder,
                 create_report_agent_job_result_tool(),
-                false,
+                /*supports_parallel_tool_calls*/ false,
                 config.code_mode_enabled,
             );
             builder.register_handler("report_agent_job_result", agent_jobs_handler);
@@ -2881,7 +2979,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     push_tool_spec(
                         &mut builder,
                         ToolSpec::Function(converted_tool),
-                        false,
+                        /*supports_parallel_tool_calls*/ false,
                         config.code_mode_enabled,
                     );
                     builder.register_handler(name, mcp_handler.clone());
@@ -2900,7 +2998,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
                     push_tool_spec(
                         &mut builder,
                         ToolSpec::Function(converted_tool),
-                        false,
+                        /*supports_parallel_tool_calls*/ false,
                         config.code_mode_enabled,
                     );
                     builder.register_handler(tool.name.clone(), dynamic_tool_handler.clone());

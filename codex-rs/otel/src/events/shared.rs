@@ -2,10 +2,10 @@ use chrono::SecondsFormat;
 use chrono::Utc;
 
 macro_rules! log_event {
-    ($level:expr, $self:expr, $($fields:tt)*) => {{
+    ($self:expr, $($fields:tt)*) => {{
         tracing::event!(
             target: $crate::targets::OTEL_LOG_ONLY_TARGET,
-            $level,
+            tracing::Level::INFO,
             $($fields)*
             event.timestamp = %$crate::events::shared::timestamp(),
             conversation.id = %$self.metadata.conversation_id,
@@ -22,10 +22,10 @@ macro_rules! log_event {
 }
 
 macro_rules! trace_event {
-    ($level:expr, $self:expr, $($fields:tt)*) => {{
+    ($self:expr, $($fields:tt)*) => {{
         tracing::event!(
             target: $crate::targets::OTEL_TRACE_SAFE_TARGET,
-            $level,
+            tracing::Level::INFO,
             $($fields)*
             event.timestamp = %$crate::events::shared::timestamp(),
             conversation.id = %$self.metadata.conversation_id,
@@ -41,14 +41,13 @@ macro_rules! trace_event {
 
 macro_rules! log_and_trace_event {
     (
-        $level:expr,
         $self:expr,
         common: { $($common:tt)* },
         log: { $($log:tt)* },
         trace: { $($trace:tt)* },
     ) => {{
-        log_event!($level, $self, $($common)* $($log)*);
-        trace_event!($level, $self, $($common)* $($trace)*);
+        log_event!($self, $($common)* $($log)*);
+        trace_event!($self, $($common)* $($trace)*);
     }};
 }
 
