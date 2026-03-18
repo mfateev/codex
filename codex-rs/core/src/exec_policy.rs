@@ -107,7 +107,7 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
 /// `prompt_is_rule` distinguishes policy-rule prompts from sandbox/escalation
 /// prompts so granular `rules` and `sandbox_approval` settings are honored
 /// independently. When both are present, policy-rule prompts take precedence.
-pub(crate) fn prompt_is_rejected_by_policy(
+pub fn prompt_is_rejected_by_policy(
     approval_policy: AskForApproval,
     prompt_is_rule: bool,
 ) -> Option<&'static str> {
@@ -168,28 +168,28 @@ pub enum ExecPolicyUpdateError {
     },
 }
 
-pub(crate) struct ExecPolicyManager {
+pub struct ExecPolicyManager {
     policy: ArcSwap<Policy>,
 }
 
-pub(crate) struct ExecApprovalRequest<'a> {
-    pub(crate) command: &'a [String],
-    pub(crate) approval_policy: AskForApproval,
-    pub(crate) sandbox_policy: &'a SandboxPolicy,
-    pub(crate) file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
-    pub(crate) sandbox_permissions: SandboxPermissions,
-    pub(crate) prefix_rule: Option<Vec<String>>,
+pub struct ExecApprovalRequest<'a> {
+    pub command: &'a [String],
+    pub approval_policy: AskForApproval,
+    pub sandbox_policy: &'a SandboxPolicy,
+    pub file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
+    pub sandbox_permissions: SandboxPermissions,
+    pub prefix_rule: Option<Vec<String>>,
 }
 
 impl ExecPolicyManager {
-    pub(crate) fn new(policy: Arc<Policy>) -> Self {
+    pub fn new(policy: Arc<Policy>) -> Self {
         Self {
             policy: ArcSwap::from(policy),
         }
     }
 
     #[instrument(level = "info", skip_all)]
-    pub(crate) async fn load(config_stack: &ConfigLayerStack) -> Result<Self, ExecPolicyError> {
+    pub async fn load(config_stack: &ConfigLayerStack) -> Result<Self, ExecPolicyError> {
         let (policy, warning) = load_exec_policy_with_warning(config_stack).await?;
         if let Some(err) = warning.as_ref() {
             tracing::warn!("failed to parse rules: {err}");
@@ -197,11 +197,11 @@ impl ExecPolicyManager {
         Ok(Self::new(Arc::new(policy)))
     }
 
-    pub(crate) fn current(&self) -> Arc<Policy> {
+    pub fn current(&self) -> Arc<Policy> {
         self.policy.load_full()
     }
 
-    pub(crate) async fn create_exec_approval_requirement_for_command(
+    pub async fn create_exec_approval_requirement_for_command(
         &self,
         req: ExecApprovalRequest<'_>,
     ) -> ExecApprovalRequirement {
