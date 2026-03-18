@@ -541,6 +541,16 @@ impl ModelsManager {
         )
     }
 
+    /// Resolve `ModelInfo` from the bundled model catalog (no network, no instance needed).
+    ///
+    /// Loads the compiled-in `models.json` and applies config-based overrides,
+    /// returning full model metadata (apply_patch_tool_type, shell_type, etc.)
+    /// for any known model slug.
+    pub fn resolve_from_bundled_catalog(model: &str, config: &Config) -> ModelInfo {
+        let candidates = Self::load_remote_models_from_file().unwrap_or_default();
+        Self::construct_model_info_from_candidates(model, &candidates, config)
+    }
+
     /// Get model identifier without consulting remote state or cache.
     pub fn get_model_offline_for_tests(model: Option<&str>) -> String {
         if let Some(model) = model {
