@@ -2140,7 +2140,7 @@ impl Session {
         state.history.estimate_token_count(turn_context)
     }
 
-    pub(crate) async fn get_base_instructions(&self) -> BaseInstructions {
+    pub async fn get_base_instructions(&self) -> BaseInstructions {
         let state = self.state.lock().await;
         BaseInstructions {
             text: state.session_configuration.base_instructions.clone(),
@@ -3528,7 +3528,7 @@ impl Session {
         ));
         let model = ModelsManager::get_model_offline_for_tests(config.model.as_deref());
         let model_info =
-            ModelsManager::construct_model_info_offline_for_tests(model.as_str(), &config);
+            ModelsManager::resolve_from_bundled_catalog(model.as_str(), &config);
 
         let collaboration_mode = CollaborationMode {
             mode: ModeKind::Default,
