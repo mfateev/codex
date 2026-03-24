@@ -23,8 +23,8 @@ use codex_core::config::StartedNetworkProxy;
 use codex_core::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
 use codex_core::exec::ExecExpiration;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
-use codex_core::exec::SandboxType;
 use codex_core::sandboxing::ExecRequest;
+use codex_sandboxing::SandboxType;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::ProcessHandle;
 use codex_utils_pty::SpawnedProcess;
@@ -733,6 +733,7 @@ mod tests {
             env: HashMap::new(),
             network: None,
             expiration: ExecExpiration::DefaultTimeout,
+            capture_policy: codex_core::exec::ExecCapturePolicy::ShellTool,
             sandbox: SandboxType::WindowsRestrictedToken,
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             windows_sandbox_private_desktop: false,
@@ -845,6 +846,7 @@ mod tests {
                     env: HashMap::new(),
                     network: None,
                     expiration: ExecExpiration::Cancellation(CancellationToken::new()),
+                    capture_policy: codex_core::exec::ExecCapturePolicy::ShellTool,
                     sandbox: SandboxType::None,
                     windows_sandbox_level: WindowsSandboxLevel::Disabled,
                     windows_sandbox_private_desktop: false,

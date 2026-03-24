@@ -4,6 +4,7 @@ use crate::truncate::TruncationPolicy;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_git::GhostCommit;
+use codex_protocol::AgentPath;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -17,6 +18,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::protocol::InterAgentCommunication;
 use image::ImageBuffer;
 use image::ImageFormat;
 use image::Rgba;
@@ -32,6 +34,24 @@ fn assistant_msg(text: &str) -> ResponseItem {
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
+
+fn inter_agent_assistant_msg(text: &str) -> ResponseItem {
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        AgentPath::root().join("worker").unwrap(),
+        Vec::new(),
+        text.to_string(),
+    );
+    ResponseItem::Message {
+        id: None,
+        role: "assistant".to_string(),
+        content: vec![ContentItem::OutputText {
+            text: serde_json::to_string(&communication).unwrap(),
         }],
         end_turn: None,
         phase: None,
@@ -73,6 +93,7 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
     ResponseItem::CustomToolCallOutput {
         call_id: call_id.to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_text(output.to_string()),
     }
 }
@@ -225,6 +246,40 @@ fn items_after_last_model_generated_tokens_are_zero_without_model_generated_item
 }
 
 #[test]
+fn inter_agent_assistant_messages_are_turn_boundaries() {
+    let item = inter_agent_assistant_msg("continue");
+
+    assert!(is_user_turn_boundary(&item));
+}
+
+#[test]
+fn drop_last_n_user_turns_treats_inter_agent_assistant_messages_as_instruction_turns() {
+    let first_turn = user_input_text_msg("first");
+    let first_reply = assistant_msg("done");
+    let inter_agent_turn = inter_agent_assistant_msg("continue");
+    let inter_agent_reply = assistant_msg("worker reply");
+    let mut history = create_history_with_items(vec![
+        first_turn.clone(),
+        first_reply.clone(),
+        inter_agent_turn,
+        inter_agent_reply,
+    ]);
+
+    history.drop_last_n_user_turns(1);
+
+    assert_eq!(history.raw_items(), &vec![first_turn, first_reply]);
+}
+
+#[test]
+fn legacy_inter_agent_assistant_messages_are_not_turn_boundaries() {
+    let item = assistant_msg(
+        "author: /root\nrecipient: /root/worker\nother_recipients: []\nContent: continue",
+    );
+
+    assert!(!is_user_turn_boundary(&item));
+}
+
+#[test]
 fn total_token_usage_includes_all_items_after_last_model_generated_item() {
     let mut history = create_history_with_items(vec![assistant_msg("already counted by API")]);
     history.update_token_info(
@@ -296,6 +351,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
+            name: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "js repl result".to_string(),
@@ -358,6 +414,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
+            name: None,
             output: FunctionCallOutputPayload::from_content_items(vec![
                 FunctionCallOutputContentItem::InputText {
                     text: "js repl result".to_string(),
@@ -806,6 +863,7 @@ fn remove_first_item_handles_custom_tool_pair() {
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
+            name: None,
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
         },
     ];
@@ -885,6 +943,7 @@ fn record_items_truncates_custom_tool_call_output_content() {
     let long_output = line.repeat(2_500);
     let item = ResponseItem::CustomToolCallOutput {
         call_id: "tool-200".to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_text(long_output.clone()),
     };
 
@@ -1087,6 +1146,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "tool-x".to_string(),
+                name: None,
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
             },
         ]
@@ -1154,6 +1214,7 @@ fn normalize_removes_orphan_function_call_output() {
 fn normalize_removes_orphan_custom_tool_call_output() {
     let items = vec![ResponseItem::CustomToolCallOutput {
         call_id: "orphan-2".to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
     }];
     let mut h = create_history_with_items(items);
@@ -1229,6 +1290,7 @@ fn normalize_mixed_inserts_and_removals() {
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "t1".to_string(),
+                name: None,
                 output: FunctionCallOutputPayload::from_text("aborted".to_string()),
             },
             ResponseItem::LocalShellCall {
@@ -1366,6 +1428,7 @@ fn normalize_removes_orphan_function_call_output_panics_in_debug() {
 fn normalize_removes_orphan_custom_tool_call_output_panics_in_debug() {
     let items = vec![ResponseItem::CustomToolCallOutput {
         call_id: "orphan-2".to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_text("ok".to_string()),
     }];
     let mut h = create_history_with_items(items);
@@ -1532,6 +1595,7 @@ fn image_data_url_payload_does_not_dominate_custom_tool_call_output_estimate() {
     let image_url = format!("data:image/png;base64,{payload}");
     let item = ResponseItem::CustomToolCallOutput {
         call_id: "call-js-repl".to_string(),
+        name: None,
         output: FunctionCallOutputPayload::from_content_items(vec![
             FunctionCallOutputContentItem::InputText {
                 text: "Screenshot captured".to_string(),

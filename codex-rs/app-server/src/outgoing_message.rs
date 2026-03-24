@@ -75,6 +75,10 @@ impl RequestContext {
     pub(crate) fn span(&self) -> Span {
         self.span.clone()
     }
+
+    fn record_turn_id(&self, turn_id: &str) {
+        self.span.record("turn.id", turn_id);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -215,6 +219,17 @@ impl OutgoingMessageSender {
         request_contexts
             .get(request_id)
             .and_then(RequestContext::request_trace)
+    }
+
+    pub(crate) async fn record_request_turn_id(
+        &self,
+        request_id: &ConnectionRequestId,
+        turn_id: &str,
+    ) {
+        let request_contexts = self.request_contexts.lock().await;
+        if let Some(request_context) = request_contexts.get(request_id) {
+            request_context.record_turn_id(turn_id);
+        }
     }
 
     async fn take_request_context(
@@ -512,38 +527,6 @@ impl OutgoingMessageSender {
         }
     }
 
-    pub(crate) async fn send_notification_to_connections(
-        &self,
-        connection_ids: &[ConnectionId],
-        notification: OutgoingNotification,
-    ) {
-        let outgoing_message = OutgoingMessage::Notification(notification);
-        if connection_ids.is_empty() {
-            if let Err(err) = self
-                .sender
-                .send(OutgoingEnvelope::Broadcast {
-                    message: outgoing_message,
-                })
-                .await
-            {
-                warn!("failed to send notification to client: {err:?}");
-            }
-            return;
-        }
-        for connection_id in connection_ids {
-            if let Err(err) = self
-                .sender
-                .send(OutgoingEnvelope::ToConnection {
-                    connection_id: *connection_id,
-                    message: outgoing_message.clone(),
-                })
-                .await
-            {
-                warn!("failed to send notification to client: {err:?}");
-            }
-        }
-    }
-
     pub(crate) async fn send_error(
         &self,
         request_id: ConnectionRequestId,
@@ -601,19 +584,11 @@ impl OutgoingMessageSender {
 #[serde(untagged)]
 pub(crate) enum OutgoingMessage {
     Request(ServerRequest),
-    Notification(OutgoingNotification),
     /// AppServerNotification is specific to the case where this is run as an
     /// "app server" as opposed to an MCP server.
     AppServerNotification(ServerNotification),
     Response(OutgoingResponse),
     Error(OutgoingError),
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(crate) struct OutgoingNotification {
-    pub method: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

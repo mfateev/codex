@@ -22,8 +22,12 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::contextual_user_message::TURN_ABORTED_CLOSE_TAG;
 use crate::contextual_user_message::TURN_ABORTED_OPEN_TAG;
-use crate::event_mapping::parse_turn_item;
+use crate::hook_runtime::PendingInputHookDisposition;
+use crate::hook_runtime::inspect_pending_input;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_pending_input;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TokenUsage;
@@ -38,14 +42,13 @@ use codex_otel::metrics::names::TURN_E2E_DURATION_METRIC;
 use codex_otel::metrics::names::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::metrics::names::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::metrics::names::TURN_TOOL_CALL_METRIC;
-use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::user_input::UserInput;
 
-use crate::features::Feature;
+use codex_features::Feature;
 pub(crate) use compact::CompactTask;
 pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
@@ -57,6 +60,22 @@ pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
+
+/// Shared model-visible marker used by both the real interrupt path and
+/// interrupted fork snapshots.
+pub(crate) fn interrupted_turn_history_marker() -> ResponseItem {
+    ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: format!(
+                "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n{TURN_ABORTED_CLOSE_TAG}"
+            ),
+        }],
+        end_turn: None,
+        phase: None,
+    }
+}
 
 fn emit_turn_network_proxy_metric(
     session_telemetry: &SessionTelemetry,
@@ -151,7 +170,15 @@ impl Session {
     ) {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
+        self.start_task(turn_context, input, task).await;
+    }
 
+    async fn start_task<T: SessionTask>(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        input: Vec<UserInput>,
+        task: T,
+    ) {
         let task: Arc<dyn SessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -222,6 +249,22 @@ impl Session {
             .await;
     }
 
+    pub(crate) async fn ensure_task_for_queued_response_items(self: &Arc<Self>) {
+        if !self.has_queued_response_items_for_next_turn().await {
+            return;
+        }
+
+        if self.active_turn.lock().await.is_some() {
+            return;
+        }
+
+        let turn_context = self.new_default_turn().await;
+        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+            .await;
+        self.start_task(turn_context, Vec::new(), RegularTask::new())
+            .await;
+    }
+
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
         if let Some(mut active_turn) = self.take_active_turn().await {
             for task in active_turn.drain_tasks() {
@@ -230,6 +273,9 @@ impl Session {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             active_turn.clear_pending().await;
+        }
+        if reason == TurnAbortReason::Interrupted {
+            self.ensure_task_for_queued_response_items().await;
         }
     }
 
@@ -261,27 +307,16 @@ impl Session {
         }
         drop(active);
         if !pending_input.is_empty() {
-            let pending_response_items = pending_input
-                .into_iter()
-                .map(ResponseItem::from)
-                .collect::<Vec<_>>();
-            for response_item in pending_response_items {
-                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
-                    // Keep leftover user input on the same persistence + lifecycle path as the
-                    // normal pre-sampling drain. This helper records the response item once, then
-                    // emits ItemStarted/UserMessage and ItemCompleted/UserMessage for clients.
-                    self.record_user_prompt_and_emit_turn_item(
-                        turn_context.as_ref(),
-                        &user_message.content,
-                        response_item,
-                    )
-                    .await;
-                } else {
-                    self.record_conversation_items(
-                        turn_context.as_ref(),
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await;
+            for pending_input_item in pending_input {
+                match inspect_pending_input(self, &turn_context, pending_input_item).await {
+                    PendingInputHookDisposition::Accepted(pending_input) => {
+                        record_pending_input(self, &turn_context, *pending_input).await;
+                    }
+                    PendingInputHookDisposition::Blocked {
+                        additional_contexts,
+                    } => {
+                        record_additional_contexts(self, &turn_context, additional_contexts).await;
+                    }
                 }
             }
         }
@@ -380,6 +415,9 @@ impl Session {
         let mut turn = ActiveTurn::default();
         let mut turn_state = turn.turn_state.lock().await;
         turn_state.token_usage_at_turn_start = token_usage_at_turn_start;
+        for item in self.take_queued_response_items_for_next_turn().await {
+            turn_state.push_pending_input(item);
+        }
         drop(turn_state);
         turn.add_task(task);
         *active = Some(turn);
@@ -436,17 +474,7 @@ impl Session {
         if reason == TurnAbortReason::Interrupted {
             self.cleanup_after_interrupt(&task.turn_context).await;
 
-            let marker = ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: format!(
-                        "{TURN_ABORTED_OPEN_TAG}\n{TURN_ABORTED_INTERRUPTED_GUIDANCE}\n</turn_aborted>"
-                    ),
-                }],
-                end_turn: None,
-                phase: None,
-            };
+            let marker = interrupted_turn_history_marker();
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
