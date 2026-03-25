@@ -68,7 +68,7 @@ pub struct AnyToolResult {
 }
 
 impl AnyToolResult {
-    pub(crate) fn into_response(self) -> ResponseInputItem {
+    pub fn into_response(self) -> ResponseInputItem {
         let Self {
             call_id,
             payload,

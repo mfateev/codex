@@ -222,9 +222,11 @@ pub use codex_execpolicy::Decision as ExecPolicyDecision;
 pub use tools::sandboxing::ExecApprovalRequirement;
 pub use tools::spec::parse_tool_input_schema;
 pub use tools::spec::{ToolsConfig, ToolsConfigParams, build_specs};
+pub use tools::registry::AnyToolResult;
 pub use tools::registry::ConfiguredToolSpec;
 pub use tools::registry::ToolRegistry;
 pub use tools::registry::ToolRegistryBuilder;
+pub use function_tool::FunctionCallError;
 pub use tools::context::ToolInvocation;
 pub use turn_metadata::build_turn_metadata_header;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
