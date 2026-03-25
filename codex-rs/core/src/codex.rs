@@ -935,7 +935,7 @@ impl TurnContext {
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             sub_id.clone(),
             sub_id.clone(),
-            config.cwd.clone(),
+            config.cwd.clone().to_path_buf(),
             &sandbox_policy,
             windows_sandbox_level,
         ));
@@ -3640,9 +3640,10 @@ impl Session {
             ),
             shell_zsh_path: config.zsh_path.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
-            analytics_events_client: crate::analytics_client::AnalyticsEventsClient::new(
-                Arc::clone(&config),
+            analytics_events_client: codex_analytics::AnalyticsEventsClient::new(
                 Arc::clone(&auth_manager),
+                config.chatgpt_base_url.trim_end_matches('/').to_string(),
+                config.analytics_enabled,
             ),
             hooks: Hooks::new(HooksConfig {
                 legacy_notify_argv: config.notify.clone(),
@@ -3661,10 +3662,10 @@ impl Session {
             models_manager,
             tool_approvals: tokio::sync::Mutex::new(ApprovalStore::default()),
             execve_session_approvals: RwLock::new(HashMap::new()),
-            skills_manager: Arc::new(SkillsManager::new(config.codex_home.clone(), Arc::clone(&plugins_manager), false)),
+            skills_manager: Arc::new(SkillsManager::new(config.codex_home.clone(), false)),
             plugins_manager: Arc::clone(&plugins_manager),
             mcp_manager: Arc::new(crate::mcp::McpManager::new(plugins_manager)),
-            file_watcher: Arc::new(FileWatcher::noop()),
+            skills_watcher: Arc::new(crate::skills_watcher::SkillsWatcher::noop()),
             agent_control: AgentControl::default(),
             network_proxy: None,
             network_approval: Arc::new(NetworkApprovalService::default()),

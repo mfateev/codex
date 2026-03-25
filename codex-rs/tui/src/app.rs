@@ -2838,7 +2838,7 @@ impl App {
         };
         let chat_widget = ChatWidget::new_with_op_sender(init, op_tx);
 
-        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let file_search = FileSearchManager::new(config.cwd.clone().to_path_buf(), app_event_tx.clone());
 
         let mut app = Self {
             server: None,

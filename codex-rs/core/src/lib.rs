@@ -218,7 +218,6 @@ pub use exec_policy::check_execpolicy_for_warnings;
 pub use exec_policy::format_exec_policy_error_with_source;
 pub use exec_policy::load_exec_policy;
 pub use file_watcher::FileWatcherEvent;
-pub use codex_sandboxing::get_platform_sandbox;
 pub use codex_execpolicy::Decision as ExecPolicyDecision;
 pub use tools::sandboxing::ExecApprovalRequirement;
 pub use tools::spec::parse_tool_input_schema;
