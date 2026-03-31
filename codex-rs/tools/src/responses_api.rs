@@ -21,7 +21,7 @@ pub struct FreeformToolFormat {
     pub definition: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResponsesApiTool {
     pub name: String,
     pub description: String,
