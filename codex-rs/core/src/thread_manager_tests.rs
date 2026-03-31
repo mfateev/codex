@@ -75,7 +75,7 @@ fn truncates_before_requested_user_message() {
         .collect();
     let truncated = truncate_before_nth_user_message(
         InitialHistory::Forked(initial),
-        1,
+        /*n*/ 1,
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
@@ -100,7 +100,7 @@ fn truncates_before_requested_user_message() {
         .collect();
     let truncated2 = truncate_before_nth_user_message(
         InitialHistory::Forked(initial2.clone()),
-        2,
+        /*n*/ 2,
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
@@ -210,7 +210,7 @@ async fn ignores_session_prefix_messages_when_truncating() {
 
     let truncated = truncate_before_nth_user_message(
         InitialHistory::Forked(rollout_items),
-        1,
+        /*n*/ 1,
         &SnapshotTurnState {
             ends_mid_turn: false,
             active_turn_id: None,
@@ -244,6 +244,9 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
         CodexAuth::from_api_key("dummy"),
         config.model_provider.clone(),
         config.codex_home.clone(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
     let thread_1 = manager
         .start_thread(config.clone())
@@ -292,6 +295,9 @@ async fn new_uses_configured_openai_provider_for_model_refresh() {
         auth_manager,
         SessionSource::Exec,
         CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
 
     let _ = manager.list_models(RefreshStrategy::Online).await;
@@ -419,6 +425,9 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
 
     let source = manager
@@ -516,6 +525,9 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
 
     let source = manager
@@ -602,6 +614,9 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         auth_manager.clone(),
         SessionSource::Exec,
         CollaborationModesConfig::default(),
+        Arc::new(codex_exec_server::EnvironmentManager::new(
+            /*exec_server_url*/ None,
+        )),
     );
 
     let source = manager

@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
@@ -19,7 +20,8 @@ use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
-use codex_protocol::protocol::Event;
+use codex_protocol::protocol::GetHistoryEntryResponseEvent;
+use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
@@ -76,7 +78,11 @@ pub struct ConnectorsSnapshot {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum AppEvent {
-    CodexEvent(Event),
+    /// A core protocol event from an external AgentSession (used by run_with_session).
+    /// TODO: Currently unused; will be restored with app-server integration.
+    #[allow(dead_code)]
+    CodexEvent(codex_protocol::protocol::Event),
+
     /// Open the agent picker for switching active threads.
     OpenAgentPicker,
 
@@ -94,13 +100,13 @@ pub enum AppEvent {
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {
         thread_id: ThreadId,
-        op: codex_protocol::protocol::Op,
+        op: Op,
     },
 
-    /// Forward an event from a non-primary thread into the app-level thread router.
-    ThreadEvent {
+    /// Deliver a synthetic history lookup response to a specific thread channel.
+    ThreadHistoryEntryResponse {
         thread_id: ThreadId,
-        event: Event,
+        event: GetHistoryEntryResponseEvent,
     },
 
     /// Start a new session.
@@ -125,11 +131,12 @@ pub enum AppEvent {
     Exit(ExitMode),
 
     /// Request to exit the application due to a fatal error.
+    #[allow(dead_code)]
     FatalExitRequest(String),
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
-    CodexOp(codex_protocol::protocol::Op),
+    CodexOp(Op),
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
@@ -145,6 +152,7 @@ pub enum AppEvent {
     },
 
     /// Result of refreshing rate limits
+    #[allow(dead_code)]
     RateLimitSnapshotFetched(RateLimitSnapshot),
 
     /// Result of prefetching connectors.
@@ -254,6 +262,14 @@ pub enum AppEvent {
 
     /// Abandon the post-install plugin app-auth flow.
     PluginInstallAuthAbandon,
+
+    /// Fetch MCP inventory via app-server RPCs and render it into history.
+    FetchMcpInventory,
+
+    /// Result of fetching MCP inventory via app-server RPCs.
+    McpInventoryLoaded {
+        result: Result<Vec<McpServerStatus>, String>,
+    },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
@@ -487,21 +503,6 @@ pub enum AppEvent {
         text: String,
     },
 
-    /// Voice transcription finished for the given placeholder id.
-    #[cfg(not(target_os = "linux"))]
-    TranscriptionComplete {
-        id: String,
-        text: String,
-    },
-
-    /// Voice transcription failed; remove the placeholder identified by `id`.
-    #[cfg(not(target_os = "linux"))]
-    TranscriptionFailed {
-        id: String,
-        #[allow(dead_code)]
-        error: String,
-    },
-
     /// Open the branch picker option from the review popup.
     OpenReviewBranchPicker(PathBuf),
 
@@ -545,6 +546,7 @@ pub enum AppEvent {
     },
     /// Dismiss the status-line setup UI without changing config.
     StatusLineSetupCancelled,
+
     /// Apply a user-confirmed terminal-title item ordering/selection.
     TerminalTitleSetup {
         items: Vec<TerminalTitleItem>,
