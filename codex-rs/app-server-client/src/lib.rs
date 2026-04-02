@@ -388,6 +388,27 @@ pub enum AppServerClient {
 }
 
 impl InProcessAppServerClient {
+    /// Create a stub client that is not backed by a real app-server runtime.
+    ///
+    /// All requests will fail immediately (the command channel is dropped).
+    /// `next_event()` will block forever (the event sender is dropped without
+    /// closing the receiver, so `recv()` returns `None` only on drop).
+    ///
+    /// This is intended for use with external agent sessions (e.g. Temporal
+    /// harness) where the TUI's ChatWidget sends ops directly via a channel
+    /// (`CodexOpTarget::Direct`) and the AppServerSession parameter in event
+    /// handlers is unused for turn operations.
+    pub fn stub() -> Self {
+        let (command_tx, _command_rx) = mpsc::channel::<ClientCommand>(1);
+        let (_event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(1);
+        let worker_handle = tokio::spawn(std::future::pending::<()>());
+        Self {
+            command_tx,
+            event_rx,
+            worker_handle,
+        }
+    }
+
     /// Starts the in-process runtime and facade worker task.
     ///
     /// The returned client is ready for requests and event consumption. If the

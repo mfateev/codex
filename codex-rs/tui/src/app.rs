@@ -3576,30 +3576,200 @@ impl App {
     /// Run the TUI event loop backed by an externally-provided [`AgentSession`]
     /// instead of the built-in app server.
     ///
-    /// TODO: This needs to be re-implemented for the app-server architecture.
-    /// The upstream refactoring replaced the direct ThreadManager/AgentSession
-    /// approach with an AppServerSession abstraction. This stub preserves the
-    /// public API surface for the Temporal harness but is not yet functional.
+    /// The external session is bridged to the TUI via [`wire_session`], which
+    /// creates a direct op channel (`CodexOpTarget::Direct`). Turn operations
+    /// bypass `AppServerSession` entirely — a stub is passed to the event
+    /// handlers only to satisfy the type signature.
     #[allow(clippy::too_many_arguments)]
     pub async fn run_with_session(
-        _tui: &mut tui::Tui,
-        _session: Arc<dyn codex_core::AgentSession>,
-        _session_configured: codex_protocol::protocol::SessionConfiguredEvent,
-        _config: Config,
+        tui: &mut tui::Tui,
+        session: Arc<dyn codex_core::AgentSession>,
+        session_configured: codex_protocol::protocol::SessionConfiguredEvent,
+        mut config: Config,
         _auth_manager: Arc<codex_core::AuthManager>,
         _models_manager: Arc<codex_core::models_manager::manager::ModelsManager>,
-        _model: String,
-        _initial_prompt: Option<String>,
-        _feedback: codex_feedback::CodexFeedback,
-        _agent_browser: Option<Arc<dyn crate::ExternalAgentBrowser>>,
+        model: String,
+        initial_prompt: Option<String>,
+        feedback: codex_feedback::CodexFeedback,
+        agent_browser: Option<Arc<dyn crate::ExternalAgentBrowser>>,
     ) -> Result<AppExitInfo> {
-        // TODO: Re-implement using the new AppServerSession architecture.
-        // The external AgentSession needs to be bridged to the app-server
-        // protocol, or run_with_session needs a dedicated event loop that
-        // bypasses AppServerSession.
-        color_eyre::eyre::bail!(
-            "run_with_session is not yet implemented for the app-server architecture"
-        )
+        use tokio_stream::StreamExt;
+        let (app_event_tx, mut app_event_rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(app_event_tx);
+        config.model = Some(model.clone());
+
+        // Wire the external session into the TUI channel protocol.
+        let op_tx = crate::chatwidget::wire_session(
+            session,
+            session_configured,
+            app_event_tx.clone(),
+        );
+
+        let session_telemetry = SessionTelemetry::new(
+            ThreadId::new(),
+            &model,
+            &model,
+            None,
+            None,
+            None,
+            "codex-temporal-tui".to_string(),
+            false,
+            "temporal-tui".to_string(),
+            codex_protocol::protocol::SessionSource::Cli,
+        );
+
+        let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
+        let enhanced_keys_supported = tui.enhanced_keys_supported();
+        let feedback_audience = FeedbackAudience::External;
+
+        let model_catalog = Arc::new(crate::model_catalog::ModelCatalog::new(
+            Vec::new(),
+            codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig {
+                default_mode_request_user_input: false,
+            },
+        ));
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: config.clone(),
+            frame_requester: tui.frame_requester(),
+            app_event_tx: app_event_tx.clone(),
+            initial_user_message: crate::chatwidget::create_initial_user_message(
+                initial_prompt,
+                Vec::new(),
+                Vec::new(),
+            ),
+            enhanced_keys_supported,
+            has_chatgpt_account: false,
+            model_catalog: model_catalog.clone(),
+            feedback: feedback.clone(),
+            is_first_run: false,
+            feedback_audience,
+            status_account_display: None,
+            initial_plan_type: None,
+            model: Some(model),
+            startup_tooltip_override: None,
+            status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
+            terminal_title_invalid_items_warned: terminal_title_invalid_items_warned.clone(),
+            session_telemetry: session_telemetry.clone(),
+        };
+        let chat_widget = ChatWidget::new_with_op_sender(init, op_tx);
+
+        let file_search =
+            FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
+
+        let mut app = Self {
+            model_catalog,
+            session_telemetry,
+            app_event_tx,
+            chat_widget,
+            config,
+            active_profile: None,
+            cli_kv_overrides: Vec::new(),
+            harness_overrides: ConfigOverrides::default(),
+            runtime_approval_policy_override: None,
+            runtime_sandbox_policy_override: None,
+            file_search,
+            enhanced_keys_supported,
+            transcript_cells: Vec::new(),
+            overlay: None,
+            deferred_history_lines: Vec::new(),
+            has_emitted_history_lines: false,
+            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            status_line_invalid_items_warned,
+            terminal_title_invalid_items_warned,
+            backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
+            feedback,
+            feedback_audience,
+            remote_app_server_url: None,
+            remote_app_server_auth_token: None,
+            pending_update_action: None,
+            pending_shutdown_exit_thread_id: None,
+            windows_sandbox: WindowsSandboxState::default(),
+            thread_event_channels: HashMap::new(),
+            thread_event_listener_tasks: HashMap::new(),
+            agent_navigation: AgentNavigationState::default(),
+            active_thread_id: None,
+            active_thread_rx: None,
+            primary_thread_id: None,
+            last_subagent_backfill_attempt: None,
+            primary_session_configured: None,
+            pending_primary_events: VecDeque::new(),
+            agent_browser,
+            pending_app_server_requests: PendingAppServerRequests::default(),
+        };
+
+        // Create a stub AppServerSession. Turn operations are routed directly
+        // to the external session via CodexOpTarget::Direct, so the stub is
+        // only passed to satisfy handler signatures. Operations that do reach
+        // it (e.g. thread_unsubscribe during shutdown) will fail harmlessly.
+        let stub_client = codex_app_server_client::InProcessAppServerClient::stub();
+        let mut app_server = AppServerSession::new(
+            codex_app_server_client::AppServerClient::InProcess(stub_client),
+        );
+
+        let tui_events = tui.event_stream();
+        tokio::pin!(tui_events);
+
+        tui.frame_requester().schedule_frame();
+
+        let mut waiting_for_initial_session_configured = false;
+
+        let exit_reason = loop {
+            let control = select! {
+                Some(event) = app_event_rx.recv() => {
+                    match app.handle_event(tui, &mut app_server, event).await {
+                        Ok(control) => control,
+                        Err(err) => break Err(err),
+                    }
+                }
+                active = async {
+                    if let Some(rx) = app.active_thread_rx.as_mut() {
+                        rx.recv().await
+                    } else {
+                        None
+                    }
+                }, if App::should_handle_active_thread_events(
+                    waiting_for_initial_session_configured,
+                    app.active_thread_rx.is_some()
+                ) => {
+                    if let Some(event) = active {
+                        if let Err(err) = app.handle_active_thread_event(tui, &mut app_server, event).await {
+                            break Err(err);
+                        }
+                    } else {
+                        app.clear_active_thread().await;
+                    }
+                    AppRunControl::Continue
+                }
+                Some(event) = tui_events.next() => {
+                    match app.handle_tui_event(tui, &mut app_server, event).await {
+                        Ok(control) => control,
+                        Err(err) => break Err(err),
+                    }
+                }
+            };
+            if App::should_stop_waiting_for_initial_session(
+                waiting_for_initial_session_configured,
+                app.primary_thread_id,
+            ) {
+                waiting_for_initial_session_configured = false;
+            }
+            match control {
+                AppRunControl::Continue => {}
+                AppRunControl::Exit(reason) => break Ok(reason),
+            }
+        };
+        tui.terminal.clear()?;
+        let exit_reason = exit_reason?;
+        Ok(AppExitInfo {
+            token_usage: app.token_usage(),
+            thread_id: app.chat_widget.thread_id(),
+            thread_name: app.chat_widget.thread_name(),
+            update_action: app.pending_update_action,
+            exit_reason,
+        })
     }
 
     pub(crate) async fn handle_tui_event(
